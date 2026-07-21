@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { AlertTriangle, BarChart3, Check, CirclePause, Clock3, Copy, ExternalLink, FileImage, History, ImagePlus, Link2, Palette, Play, Save, Settings2, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, BarChart3, Check, CirclePause, Clock3, Copy, ExternalLink, FileImage, History, ImagePlus, Link2, MapPin, Palette, Play, Plus, Save, Settings2, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { api } from "../api";
-import type { QrStyle, RelayCode, Revision, Stats } from "../types";
+import type { GateQuestion, GateSettings, QrStyle, RelayCode, Revision, Stats } from "../types";
 import { QrDesigner } from "./QrDesigner";
 
 interface Props {
@@ -18,6 +18,8 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
   const [name, setName] = useState(code.name);
   const [style, setStyle] = useState<QrStyle>(code.style);
   const [disabledReason, setDisabledReason] = useState(code.disabledReason ?? "");
+  const [gate, setGate] = useState<GateSettings>(code.gate);
+  const [allowedRegionsText, setAllowedRegionsText] = useState(code.gate.allowedRegions.join("\n"));
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,6 +34,8 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
     setName(code.name);
     setStyle(code.style);
     setDisabledReason(code.disabledReason ?? "");
+    setGate(code.gate);
+    setAllowedRegionsText(code.gate.allowedRegions.join("\n"));
     setError("");
     setMessage("");
   }, [code.id, code.updatedAt]);
@@ -114,6 +118,32 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
     await api<{ code: RelayCode }>(`/api/codes/${code.id}/source-qr`, { method: "DELETE" })
   ).code, "二维码原图已移除，Fallback 已关闭");
 
+  const parsedRegions = () => [...new Set(allowedRegionsText.split(/[\n,，、]/).map((region) => region.trim()).filter(Boolean))];
+
+  const saveGate = () => void act(async () => (
+    await api<{ code: RelayCode }>(`/api/codes/${code.id}/gate`, {
+      method: "PUT",
+      body: JSON.stringify({ ...gate, allowedRegions: parsedRegions() }),
+    })
+  ).code, gate.enabled ? "入群条件已启用" : "入群条件已保存并关闭");
+
+  const updateQuestion = (id: string, update: (question: GateQuestion) => GateQuestion) => {
+    setGate((current) => ({ ...current, questions: current.questions.map((question) => question.id === id ? update(question) : question) }));
+  };
+
+  const addQuestion = (type: GateQuestion["type"]) => {
+    const id = crypto.randomUUID().replaceAll("-", "");
+    const question: GateQuestion = type === "choice"
+      ? { id, type, prompt: "", options: ["", ""], correctOption: 0 }
+      : { id, type, prompt: "", correctAnswer: "" };
+    setGate((current) => ({ ...current, questions: [...current.questions, question] }));
+  };
+
+  const removeQuestion = (id: string) => setGate((current) => ({ ...current, questions: current.questions.filter((question) => question.id !== id) }));
+
+  const gatePayload = { ...gate, allowedRegions: parsedRegions() };
+  const gateDirty = JSON.stringify(gatePayload) !== JSON.stringify(code.gate);
+
   const restore = (revision: Revision) => {
     if (!window.confirm(`恢复到目标“${revision.target}”？这会创建一个新的历史版本。`)) return;
     void act(async () => (await api<{ code: RelayCode }>(`/api/codes/${code.id}/history/${revision.id}/restore`, { method: "POST" })).code, "历史目标已恢复");
@@ -178,6 +208,38 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
             <p className="hint">开关关闭时直接跳转；开启时扫码者可选择打开链接或长按识别原图。</p>
           </article>
 
+          <article className="panel gate-control">
+            <div className="panel-heading">
+              <div><span className="panel-icon"><ShieldCheck size={18} /></span><div><h3>入群条件</h3><p>按 IP 属地和答题结果决定是否显示链接与二维码</p></div></div>
+              <label className="switch" title={code.fallbackEnabled ? "启用入群条件" : "请先启用 Fallback"}><input type="checkbox" checked={gate.enabled} disabled={busy || !code.fallbackEnabled} onChange={(event) => setGate((current) => ({ ...current, enabled: event.target.checked }))} /><span /></label>
+            </div>
+
+            {!code.fallbackEnabled && <div className="gate-prerequisite">请先上传二维码原图并启用 Fallback，入群条件才能保护链接和二维码图片。</div>}
+
+            <section className="gate-section">
+              <div className="gate-section-title"><div><MapPin size={16} /><strong>IP 属地筛选</strong></div><label className="switch"><input type="checkbox" checked={gate.locationEnabled} onChange={(event) => setGate((current) => ({ ...current, locationEnabled: event.target.checked }))} /><span /></label></div>
+              {gate.locationEnabled && <label className="field"><span>允许的属地</span><textarea rows={3} value={allowedRegionsText} onChange={(event) => setAllowedRegionsText(event.target.value)} placeholder={"浙江省\n杭州市"} /><small>一行一个，也可用逗号或顿号分隔；国家、省或城市任一匹配即可。</small></label>}
+            </section>
+
+            <section className="gate-section">
+              <div className="gate-section-title"><div><ShieldCheck size={16} /><strong>验证题目</strong><small>{gate.questions.length}/10</small></div><div className="question-add"><button type="button" className="button ghost compact" disabled={gate.questions.length >= 10} onClick={() => addQuestion("choice")}><Plus size={14} />单选题</button><button type="button" className="button ghost compact" disabled={gate.questions.length >= 10} onClick={() => addQuestion("text")}><Plus size={14} />填空题</button></div></div>
+              {gate.questions.length === 0 ? <div className="gate-empty">还没有题目。可仅使用属地筛选，也可以添加多道单选题和填空题。</div> : <div className="question-list">{gate.questions.map((question, questionIndex) => <div className="question-editor" key={question.id}>
+                <div className="question-editor-head"><strong>第 {questionIndex + 1} 题</strong><select value={question.type} onChange={(event) => updateQuestion(question.id, (current) => event.target.value === "choice"
+                  ? { id: current.id, prompt: current.prompt, type: "choice", options: ["", ""], correctOption: 0 }
+                  : { id: current.id, prompt: current.prompt, type: "text", correctAnswer: "" })}><option value="choice">单选题</option><option value="text">填空题</option></select><button type="button" className="icon-button danger-text" title="删除题目" onClick={() => removeQuestion(question.id)}><Trash2 size={15} /></button></div>
+                <input value={question.prompt} maxLength={200} onChange={(event) => updateQuestion(question.id, (current) => ({ ...current, prompt: event.target.value }))} placeholder="输入题目" />
+                {question.type === "choice" ? <div className="choice-editor">{question.options.map((option, optionIndex) => <div className="choice-row" key={`${question.id}-${optionIndex}`}><input type="radio" name={`correct-${question.id}`} checked={question.correctOption === optionIndex} onChange={() => updateQuestion(question.id, (current) => current.type === "choice" ? ({ ...current, correctOption: optionIndex }) : current)} title="设为正确答案" /><input value={option} maxLength={100} onChange={(event) => updateQuestion(question.id, (current) => current.type === "choice" ? ({ ...current, options: current.options.map((item, index) => index === optionIndex ? event.target.value : item) }) : current)} placeholder={`选项 ${optionIndex + 1}`} />{question.options.length > 2 && <button type="button" className="icon-button danger-text" title="删除选项" onClick={() => updateQuestion(question.id, (current) => {
+                    if (current.type !== "choice") return current;
+                    const options = current.options.filter((_, index) => index !== optionIndex);
+                    const correctOption = current.correctOption === optionIndex ? 0 : current.correctOption > optionIndex ? current.correctOption - 1 : current.correctOption;
+                    return { ...current, options, correctOption };
+                  })}><X size={14} /></button>}</div>)}<button type="button" className="button ghost compact add-option" disabled={question.options.length >= 8} onClick={() => updateQuestion(question.id, (current) => current.type === "choice" ? ({ ...current, options: [...current.options, ""] }) : current)}><Plus size={14} />添加选项</button><small>点击选项左侧圆点设置正确答案。</small></div> : <label className="field"><span>标准答案</span><input value={question.correctAnswer} maxLength={200} onChange={(event) => updateQuestion(question.id, (current) => current.type === "text" ? ({ ...current, correctAnswer: event.target.value }) : current)} placeholder="输入唯一正确答案" /><small>校验时忽略首尾空格和英文大小写，不做模糊匹配。</small></label>}
+              </div>)}</div>}
+            </section>
+
+            <div className="gate-save"><p>开启后，访客必须满足属地要求并答对全部题目；失败时不会返回目标链接或二维码图片。</p><button type="button" className="button primary" disabled={busy || !gateDirty || (gate.enabled && !code.fallbackEnabled)} onClick={saveGate}><Save size={16} />保存入群条件</button></div>
+          </article>
+
           <article className={`panel redirect-control ${code.redirectEnabled ? "" : "is-paused"}`}>
             <div className="panel-heading"><div><span className="panel-icon"><Play size={18} /></span><div><h3>跳转控制</h3><p>单独暂停这个二维码，并向扫码者说明原因</p></div></div></div>
             {code.redirectEnabled ? <div className="pause-form">
@@ -217,6 +279,8 @@ function Analytics({ stats }: { stats: Stats | null }) {
     <article className="panel chart-panel"><div className="panel-heading"><div><span className="panel-icon"><BarChart3 size={18} /></span><div><h3>最近 {stats.days} 天</h3><p>按 UTC 日期统计扫码次数</p></div></div></div>{stats.daily.length ? <div className="bar-chart">{stats.daily.map((item) => <div className="bar-item" key={item.date} title={`${item.date}: ${item.count}`}><span style={{ height: `${Math.max(5, item.count / max * 100)}%` }} /><small>{item.date.slice(5)}</small></div>)}</div> : <EmptyStat />}</article>
     <article className="panel breakdown"><h3>设备</h3>{stats.devices.length ? stats.devices.map((item) => <Breakdown key={item.label} {...item} total={stats.devices.reduce((sum, row) => sum + row.count, 0)} />) : <EmptyStat />}</article>
     <article className="panel breakdown"><h3>来源</h3>{stats.referrers.length ? stats.referrers.map((item) => <Breakdown key={item.label} {...item} total={stats.referrers.reduce((sum, row) => sum + row.count, 0)} />) : <EmptyStat />}</article>
+    <article className="panel breakdown regions"><h3>IP 属地</h3>{stats.regions.length ? stats.regions.map((item) => <Breakdown key={item.label} {...item} total={stats.regions.reduce((sum, row) => sum + row.count, 0)} />) : <EmptyStat />}</article>
+    <article className="panel scan-log"><div className="panel-heading"><div><span className="panel-icon"><MapPin size={18} /></span><div><h3>最近访问记录</h3><p>显示最近 100 次扫描；IP 地址属于个人信息，请妥善保管</p></div></div></div>{stats.recentScans.length ? <div className="scan-table-wrap"><table><thead><tr><th>时间</th><th>IP 地址</th><th>IP 属地</th><th>设备</th><th>来源</th></tr></thead><tbody>{stats.recentScans.map((scan, index) => <tr key={`${scan.scannedAt}-${scan.ipAddress}-${index}`}><td>{new Date(scan.scannedAt).toLocaleString("zh-CN")}</td><td><code>{scan.ipAddress}</code></td><td>{scan.region}</td><td>{scan.device}</td><td>{scan.referrer}</td></tr>)}</tbody></table></div> : <EmptyStat />}</article>
   </div>;
 }
 

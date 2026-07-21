@@ -20,6 +20,8 @@ export interface CodeRow {
   icon_path: string | null;
   source_qr_path: string | null;
   fallback_enabled: number;
+  gate_enabled: number;
+  gate_config_json: string;
   redirect_enabled: number;
   disabled_reason: string | null;
   created_at: string;

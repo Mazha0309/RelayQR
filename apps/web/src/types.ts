@@ -15,6 +15,25 @@ export interface QrStyle {
   iconSize: number;
 }
 
+export type GateQuestion = {
+  id: string;
+  prompt: string;
+} & ({
+  type: "choice";
+  options: string[];
+  correctOption: number;
+} | {
+  type: "text";
+  correctAnswer: string;
+});
+
+export interface GateSettings {
+  enabled: boolean;
+  locationEnabled: boolean;
+  allowedRegions: string[];
+  questions: GateQuestion[];
+}
+
 export interface RelayCode {
   id: string;
   slug: string;
@@ -27,6 +46,7 @@ export interface RelayCode {
   hasSourceQr: boolean;
   sourceQrUrl: string | null;
   fallbackEnabled: boolean;
+  gate: GateSettings;
   redirectEnabled: boolean;
   disabledReason: string | null;
   publicUrl: string;
@@ -49,4 +69,12 @@ export interface Stats {
   daily: Array<{ date: string; count: number }>;
   devices: Array<{ label: string; count: number }>;
   referrers: Array<{ label: string; count: number }>;
+  regions: Array<{ label: string; count: number }>;
+  recentScans: Array<{
+    scannedAt: string;
+    ipAddress: string;
+    region: string;
+    device: string;
+    referrer: string;
+  }>;
 }

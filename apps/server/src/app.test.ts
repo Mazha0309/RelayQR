@@ -17,6 +17,7 @@ describe("RelayQR API", () => {
       webDistDir: path.join(dataDir, "missing-web"),
       publicBaseUrl: "http://relay.test",
       sessionSecret: "test-session-secret-with-enough-entropy",
+      trustProxy: true,
     });
     await app.ready();
     const register = await app.inject({
@@ -141,6 +142,76 @@ describe("RelayQR API", () => {
     expect(removed.json().code).toMatchObject({ hasSourceQr: false, fallbackEnabled: false });
     expect((await app.inject({ method: "GET", url: `/r/${code.slug}` })).statusCode).toBe(302);
     expect((await app.inject({ method: "GET", url: `/r/${code.slug}/source-qr` })).statusCode).toBe(404);
+  });
+
+  it("gates the link and source image by IP location, choice questions, and text answers", async () => {
+    const code = await createCode();
+    const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+    const multipart = imageUpload(image);
+    const target = "https://weixin.qq.com/g/protected-group";
+    await app.inject({
+      method: "POST",
+      url: `/api/codes/${code.id}/source-qr?target=${encodeURIComponent(target)}`,
+      headers: { cookie, "content-type": multipart.contentType },
+      payload: multipart.body,
+    });
+    await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: true } });
+
+    const gate = await app.inject({
+      method: "PUT",
+      url: `/api/codes/${code.id}/gate`,
+      headers: { cookie },
+      payload: {
+        enabled: true,
+        locationEnabled: true,
+        allowedRegions: ["江苏省"],
+        questions: [
+          { id: "choice1", type: "choice", prompt: "请选择正确数字", options: ["一", "二", "三"], correctOption: 1 },
+          { id: "text1", type: "text", prompt: "请输入口令", correctAnswer: "RelayQR" },
+        ],
+      },
+    });
+    expect(gate.statusCode).toBe(200);
+    expect(gate.json().code.gate).toMatchObject({ enabled: true, locationEnabled: true, allowedRegions: ["江苏省"] });
+
+    const visitorHeaders = { "x-forwarded-for": "218.4.167.70" };
+    const form = await app.inject({ method: "GET", url: `/r/${code.slug}`, headers: visitorHeaders });
+    expect(form.statusCode).toBe(200);
+    expect(form.body).toContain("请选择正确数字");
+    expect(form.body).toContain("请输入口令");
+    expect(form.body).not.toContain(target);
+    expect((await app.inject({ method: "GET", url: `/r/${code.slug}/source-qr`, headers: visitorHeaders })).statusCode).toBe(403);
+
+    const wrong = await app.inject({
+      method: "POST",
+      url: `/r/${code.slug}/verify`,
+      headers: { ...visitorHeaders, "content-type": "application/x-www-form-urlencoded" },
+      payload: "q_choice1=0&q_text1=RelayQR",
+    });
+    expect(wrong.statusCode).toBe(403);
+    expect(wrong.body).toContain("答案不正确");
+    expect(wrong.body).not.toContain(target);
+
+    const passed = await app.inject({
+      method: "POST",
+      url: `/r/${code.slug}/verify`,
+      headers: { ...visitorHeaders, "content-type": "application/x-www-form-urlencoded" },
+      payload: "q_choice1=1&q_text1=relayqr%20",
+    });
+    expect(passed.statusCode).toBe(200);
+    expect(passed.body).toContain(target);
+    const gateCookie = passed.headers["set-cookie"]!.split(";")[0]!;
+    const source = await app.inject({ method: "GET", url: `/r/${code.slug}/source-qr`, headers: { ...visitorHeaders, cookie: gateCookie } });
+    expect(source.statusCode).toBe(200);
+    expect(source.rawPayload.equals(image)).toBe(true);
+
+    const deniedRegion = await app.inject({ method: "GET", url: `/r/${code.slug}`, headers: { "x-forwarded-for": "8.8.8.8" } });
+    expect(deniedRegion.statusCode).toBe(403);
+    expect(deniedRegion.body).not.toContain(target);
+
+    const stats = await app.inject({ method: "GET", url: `/api/codes/${code.id}/stats`, headers: { cookie } });
+    expect(stats.json().recentScans[0]).toMatchObject({ ipAddress: "8.8.8.8" });
+    expect(stats.json().recentScans.some((scan: { ipAddress: string; region: string }) => scan.ipAddress === "218.4.167.70" && scan.region.includes("江苏省"))).toBe(true);
   });
 
   it("rejects dangerous targets and never reuses a deleted route", async () => {

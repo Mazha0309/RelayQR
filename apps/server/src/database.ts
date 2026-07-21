@@ -42,6 +42,8 @@ function migrate(db: RelayDatabase) {
       icon_path TEXT,
       source_qr_path TEXT,
       fallback_enabled INTEGER NOT NULL DEFAULT 0,
+      gate_enabled INTEGER NOT NULL DEFAULT 0,
+      gate_config_json TEXT NOT NULL DEFAULT '{"locationEnabled":false,"allowedRegions":[],"questions":[]}',
       redirect_enabled INTEGER NOT NULL DEFAULT 1,
       disabled_reason TEXT,
       created_at TEXT NOT NULL,
@@ -64,7 +66,9 @@ function migrate(db: RelayDatabase) {
       code_id TEXT NOT NULL REFERENCES codes(id) ON DELETE CASCADE,
       scanned_at TEXT NOT NULL,
       device_type TEXT NOT NULL,
-      referrer_host TEXT
+      referrer_host TEXT,
+      ip_address TEXT,
+      ip_region TEXT
     );
     CREATE INDEX IF NOT EXISTS scans_code_time ON scan_events(code_id, scanned_at DESC);
   `);
@@ -82,5 +86,20 @@ function migrate(db: RelayDatabase) {
   }
   if (!columnNames.has("fallback_enabled")) {
     db.exec("ALTER TABLE codes ADD COLUMN fallback_enabled INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnNames.has("gate_enabled")) {
+    db.exec("ALTER TABLE codes ADD COLUMN gate_enabled INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnNames.has("gate_config_json")) {
+    db.exec(`ALTER TABLE codes ADD COLUMN gate_config_json TEXT NOT NULL DEFAULT '{"locationEnabled":false,"allowedRegions":[],"questions":[]}'`);
+  }
+
+  const scanColumns = db.prepare("PRAGMA table_info(scan_events)").all() as Array<{ name: string }>;
+  const scanColumnNames = new Set(scanColumns.map((column) => column.name));
+  if (!scanColumnNames.has("ip_address")) {
+    db.exec("ALTER TABLE scan_events ADD COLUMN ip_address TEXT");
+  }
+  if (!scanColumnNames.has("ip_region")) {
+    db.exec("ALTER TABLE scan_events ADD COLUMN ip_region TEXT");
   }
 }

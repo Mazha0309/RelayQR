@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
+import formbody from "@fastify/formbody";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -21,6 +22,7 @@ export async function buildApp(overrides: Partial<AppConfig> = {}) {
   const db = openDatabase(config.dataDir);
 
   await app.register(cookie);
+  await app.register(formbody);
   await app.register(multipart, { limits: { files: 1, fileSize: 8_000_000 } });
   await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
 

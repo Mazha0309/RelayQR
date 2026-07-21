@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import type { RelayDatabase } from "./database.js";
 import { requireUser } from "./auth.js";
+import { gateSettingsSchema, normalizedGateConfig, parseGateConfig } from "./gate.js";
 import { randomSlug, validateTarget } from "./security.js";
 import { defaultQrStyle, qrStyleSchema } from "./style.js";
 import type { CodeRow } from "./types.js";
@@ -46,6 +47,7 @@ function ownedCode(db: RelayDatabase, codeId: string, userId: string) {
 }
 
 function codeDto(row: CodeRow, config: AppConfig) {
+  const gateConfig = parseGateConfig(row.gate_config_json);
   return {
     id: row.id,
     slug: row.slug,
@@ -58,6 +60,7 @@ function codeDto(row: CodeRow, config: AppConfig) {
     hasSourceQr: Boolean(row.source_qr_path),
     sourceQrUrl: row.source_qr_path ? `/api/codes/${row.id}/source-qr?v=${encodeURIComponent(row.updated_at)}` : null,
     fallbackEnabled: Boolean(row.fallback_enabled),
+    gate: { enabled: Boolean(row.gate_enabled), ...gateConfig },
     redirectEnabled: Boolean(row.redirect_enabled),
     disabledReason: row.disabled_reason,
     publicUrl: `${config.publicBaseUrl}/r/${row.slug}`,
@@ -151,7 +154,7 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     db.transaction(() => {
       db.prepare("INSERT INTO target_revisions (id, code_id, target, protocol, created_at) VALUES (?, ?, ?, ?, ?)")
         .run(revisionId, row.id, validated.target, validated.protocol, now);
-      db.prepare("UPDATE codes SET active_revision_id = ?, fallback_enabled = 0, updated_at = ? WHERE id = ?").run(revisionId, now, row.id);
+      db.prepare("UPDATE codes SET active_revision_id = ?, fallback_enabled = 0, gate_enabled = 0, updated_at = ? WHERE id = ?").run(revisionId, now, row.id);
     })();
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
@@ -186,7 +189,7 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     db.transaction(() => {
       db.prepare("INSERT INTO target_revisions (id, code_id, target, protocol, created_at) VALUES (?, ?, ?, ?, ?)")
         .run(newRevisionId, row.id, revision.target, revision.protocol, now);
-      db.prepare("UPDATE codes SET active_revision_id = ?, fallback_enabled = 0, updated_at = ? WHERE id = ?").run(newRevisionId, now, row.id);
+      db.prepare("UPDATE codes SET active_revision_id = ?, fallback_enabled = 0, gate_enabled = 0, updated_at = ? WHERE id = ?").run(newRevisionId, now, row.id);
     })();
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
@@ -299,7 +302,7 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     if (!row) return reply.code(404).send({ error: "活码不存在" });
     if (row.source_qr_path) fs.rmSync(path.join(config.dataDir, "source-qrs", path.basename(row.source_qr_path)), { force: true });
     const now = new Date().toISOString();
-    db.prepare("UPDATE codes SET source_qr_path = NULL, fallback_enabled = 0, updated_at = ? WHERE id = ?").run(now, row.id);
+    db.prepare("UPDATE codes SET source_qr_path = NULL, fallback_enabled = 0, gate_enabled = 0, updated_at = ? WHERE id = ?").run(now, row.id);
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
 
@@ -310,7 +313,23 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     if (!data) return;
     if (data.enabled && !row.source_qr_path) return reply.code(400).send({ error: "请先上传并识别二维码图片" });
     const now = new Date().toISOString();
-    db.prepare("UPDATE codes SET fallback_enabled = ?, updated_at = ? WHERE id = ?").run(data.enabled ? 1 : 0, now, row.id);
+    db.prepare("UPDATE codes SET fallback_enabled = ?, gate_enabled = CASE WHEN ? = 1 THEN gate_enabled ELSE 0 END, updated_at = ? WHERE id = ?")
+      .run(data.enabled ? 1 : 0, data.enabled ? 1 : 0, now, row.id);
+    return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
+  });
+
+  app.put<{ Params: { id: string } }>("/api/codes/:id/gate", { preHandler: requireUser }, async (request, reply) => {
+    const row = ownedCode(db, request.params.id, request.currentUser!.id);
+    if (!row) return reply.code(404).send({ error: "活码不存在" });
+    const data = bodyOrError(gateSettingsSchema, request.body, reply);
+    if (!data) return;
+    if (data.enabled && (!row.source_qr_path || !row.fallback_enabled)) {
+      return reply.code(400).send({ error: "请先上传二维码原图并启用 Fallback" });
+    }
+    const gateConfig = normalizedGateConfig(data);
+    const now = new Date().toISOString();
+    db.prepare("UPDATE codes SET gate_enabled = ?, gate_config_json = ?, updated_at = ? WHERE id = ?")
+      .run(data.enabled ? 1 : 0, JSON.stringify(gateConfig), now, row.id);
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
 
@@ -327,6 +346,26 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
       .all(row.id, since.toISOString());
     const referrers = db.prepare("SELECT COALESCE(referrer_host, '直接访问') AS label, COUNT(*) AS count FROM scan_events WHERE code_id = ? AND scanned_at >= ? GROUP BY referrer_host ORDER BY count DESC LIMIT 10")
       .all(row.id, since.toISOString());
-    return { total, days, daily, devices, referrers };
+    const regions = db.prepare("SELECT COALESCE(ip_region, '未知属地') AS label, COUNT(*) AS count FROM scan_events WHERE code_id = ? AND scanned_at >= ? GROUP BY ip_region ORDER BY count DESC LIMIT 15")
+      .all(row.id, since.toISOString());
+    const recentScans = db.prepare(`
+      SELECT scanned_at, ip_address, ip_region, device_type, referrer_host
+      FROM scan_events WHERE code_id = ? ORDER BY scanned_at DESC LIMIT 100
+    `).all(row.id) as Array<{ scanned_at: string; ip_address: string | null; ip_region: string | null; device_type: string; referrer_host: string | null }>;
+    return {
+      total,
+      days,
+      daily,
+      devices,
+      referrers,
+      regions,
+      recentScans: recentScans.map((scan) => ({
+        scannedAt: scan.scanned_at,
+        ipAddress: scan.ip_address ?? "未记录",
+        region: scan.ip_region ?? "未知属地",
+        device: scan.device_type,
+        referrer: scan.referrer_host ?? "直接访问",
+      })),
+    };
   });
 }
