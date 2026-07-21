@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=builder --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/apps/server/package.json ./apps/server/package.json
+COPY --from=builder --chown=node:node /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=builder --chown=node:node /app/apps/server/dist ./apps/server/dist
 COPY --from=builder --chown=node:node /app/apps/web/dist ./apps/web/dist
 
