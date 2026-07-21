@@ -24,6 +24,9 @@ export interface RelayCode {
   style: QrStyle;
   hasIcon: boolean;
   iconUrl: string | null;
+  hasSourceQr: boolean;
+  sourceQrUrl: string | null;
+  fallbackEnabled: boolean;
   redirectEnabled: boolean;
   disabledReason: string | null;
   publicUrl: string;

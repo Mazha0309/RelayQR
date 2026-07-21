@@ -56,7 +56,7 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
 
   const saveTarget = (event: FormEvent) => {
     event.preventDefault();
-    void act(async () => (await api<{ code: RelayCode }>(`/api/codes/${code.id}/target`, { method: "PUT", body: JSON.stringify({ target }) })).code, "目标已更新，固定二维码无需更换");
+    void act(async () => (await api<{ code: RelayCode }>(`/api/codes/${code.id}/target`, { method: "PUT", body: JSON.stringify({ target }) })).code, code.fallbackEnabled ? "目标已更新；为避免原图不匹配，Fallback 已自动关闭" : "目标已更新，固定二维码无需更换");
   };
 
   const saveName = () => void act(async () => (await api<{ code: RelayCode }>(`/api/codes/${code.id}`, { method: "PATCH", body: JSON.stringify({ name }) })).code, "名称已保存");
@@ -70,13 +70,22 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
   };
 
   const decodeTarget = async (file: File) => {
+    if (file.size > 8_000_000) {
+      setError("二维码图片不能超过 8 MB");
+      if (targetFileRef.current) targetFileRef.current.value = "";
+      return;
+    }
     setBusy(true); setError("");
     try {
       const { decodeQrImage } = await import("../qrDecoder");
-      setTarget(await decodeQrImage(file));
-      setMessage("已识别目标，请确认后保存");
-    } catch {
-      setError("没有在图片中识别到二维码，请换一张更清晰的原图");
+      const decodedTarget = await decodeQrImage(file);
+      const form = new FormData(); form.append("sourceQr", file);
+      const result = await api<{ code: RelayCode }>(`/api/codes/${code.id}/source-qr?target=${encodeURIComponent(decodedTarget)}`, { method: "POST", body: form });
+      setTarget(result.code.target);
+      onUpdate(result.code);
+      setMessage("目标链接和二维码原图已更新");
+    } catch (caught) {
+      setError((caught as Error).message || "没有在图片中识别到二维码，请换一张更清晰的原图");
     } finally {
       setBusy(false);
       if (targetFileRef.current) targetFileRef.current.value = "";
@@ -93,6 +102,17 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
     await api(`/api/codes/${code.id}/icon`, { method: "DELETE" });
     return { ...code, hasIcon: false, iconUrl: null, updatedAt: new Date().toISOString() };
   }, "中心图标已移除");
+
+  const setFallbackState = (enabled: boolean) => void act(async () => (
+    await api<{ code: RelayCode }>(`/api/codes/${code.id}/fallback-state`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    })
+  ).code, enabled ? "Fallback 选择页已启用" : "Fallback 已关闭，恢复自动跳转");
+
+  const removeSourceQr = () => void act(async () => (
+    await api<{ code: RelayCode }>(`/api/codes/${code.id}/source-qr`, { method: "DELETE" })
+  ).code, "二维码原图已移除，Fallback 已关闭");
 
   const restore = (revision: Revision) => {
     if (!window.confirm(`恢复到目标“${revision.target}”？这会创建一个新的历史版本。`)) return;
@@ -139,11 +159,23 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
             <form onSubmit={saveTarget} className="target-form">
               <textarea value={target} onChange={(event) => setTarget(event.target.value)} rows={3} placeholder="https://… 或自定义应用协议" />
               <div className="form-actions">
-                <input ref={targetFileRef} type="file" accept="image/*" hidden onChange={(event) => event.target.files?.[0] && decodeTarget(event.target.files[0])} />
-                <button type="button" className="button ghost" onClick={() => targetFileRef.current?.click()}><Upload size={16} />识别二维码图片</button>
+                <input ref={targetFileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => event.target.files?.[0] && decodeTarget(event.target.files[0])} />
+                <button type="button" className="button ghost" disabled={busy} onClick={() => targetFileRef.current?.click()}><Upload size={16} />上传并识别二维码</button>
                 <button className="button primary" disabled={busy || target === code.target}><Save size={16} />保存目标</button>
               </div>
             </form>
+          </article>
+
+          <article className="panel fallback-control">
+            <div className="panel-heading">
+              <div><span className="panel-icon"><FileImage size={18} /></span><div><h3>Fallback 方案</h3><p>使用上方上传的二维码原图，让扫码者自行选择入群方式</p></div></div>
+              <label className="switch" title={code.hasSourceQr ? "启用 Fallback 选择页" : "请先上传并识别二维码图片"}><input type="checkbox" checked={code.fallbackEnabled} disabled={busy || !code.hasSourceQr} onChange={(event) => setFallbackState(event.target.checked)} /><span /></label>
+            </div>
+            {code.hasSourceQr && code.sourceQrUrl ? <div className="fallback-admin">
+              <img src={code.sourceQrUrl} alt="当前上传的二维码原图" />
+              <div><strong>{code.fallbackEnabled ? "选择页已启用" : "原图已保存，Fallback 未启用"}</strong><p>{code.fallbackEnabled ? "扫码者会看到链接和原图二维码两种方式。" : "扫码仍会直接跳转到当前目标。"}</p><div className="icon-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => targetFileRef.current?.click()}><Upload size={16} />上传新二维码</button><button type="button" className="button ghost danger-text" disabled={busy} onClick={removeSourceQr}>移除原图</button></div></div>
+            </div> : <div className="fallback-empty"><p>还没有二维码原图。请点击上方“上传并识别二维码”，系统会在更新链接时自动保存原图。</p></div>}
+            <p className="hint">开关关闭时直接跳转；开启时扫码者可选择打开链接或长按识别原图。</p>
           </article>
 
           <article className={`panel redirect-control ${code.redirectEnabled ? "" : "is-paused"}`}>

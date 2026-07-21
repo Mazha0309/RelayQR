@@ -21,6 +21,7 @@ const updateSchema = z.object({
 });
 
 const targetSchema = z.object({ target: z.string() });
+const fallbackStateSchema = z.object({ enabled: z.boolean() });
 const redirectStateSchema = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(true), reason: z.string().optional() }),
   z.object({ enabled: z.literal(false), reason: z.string().trim().min(1, "关闭跳转时必须填写原因").max(300, "原因最多 300 个字符") }),
@@ -54,6 +55,9 @@ function codeDto(row: CodeRow, config: AppConfig) {
     style: JSON.parse(row.style_json),
     hasIcon: Boolean(row.icon_path),
     iconUrl: row.icon_path ? `/api/codes/${row.id}/icon?v=${encodeURIComponent(row.updated_at)}` : null,
+    hasSourceQr: Boolean(row.source_qr_path),
+    sourceQrUrl: row.source_qr_path ? `/api/codes/${row.id}/source-qr?v=${encodeURIComponent(row.updated_at)}` : null,
+    fallbackEnabled: Boolean(row.fallback_enabled),
     redirectEnabled: Boolean(row.redirect_enabled),
     disabledReason: row.disabled_reason,
     publicUrl: `${config.publicBaseUrl}/r/${row.slug}`,
@@ -147,7 +151,7 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     db.transaction(() => {
       db.prepare("INSERT INTO target_revisions (id, code_id, target, protocol, created_at) VALUES (?, ?, ?, ?, ?)")
         .run(revisionId, row.id, validated.target, validated.protocol, now);
-      db.prepare("UPDATE codes SET active_revision_id = ?, updated_at = ? WHERE id = ?").run(revisionId, now, row.id);
+      db.prepare("UPDATE codes SET active_revision_id = ?, fallback_enabled = 0, updated_at = ? WHERE id = ?").run(revisionId, now, row.id);
     })();
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
@@ -182,7 +186,7 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     db.transaction(() => {
       db.prepare("INSERT INTO target_revisions (id, code_id, target, protocol, created_at) VALUES (?, ?, ?, ?, ?)")
         .run(newRevisionId, row.id, revision.target, revision.protocol, now);
-      db.prepare("UPDATE codes SET active_revision_id = ?, updated_at = ? WHERE id = ?").run(newRevisionId, now, row.id);
+      db.prepare("UPDATE codes SET active_revision_id = ?, fallback_enabled = 0, updated_at = ? WHERE id = ?").run(newRevisionId, now, row.id);
     })();
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
@@ -233,6 +237,81 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     const now = new Date().toISOString();
     db.prepare("UPDATE codes SET icon_path = NULL, updated_at = ? WHERE id = ?").run(now, row.id);
     return reply.code(204).send();
+  });
+
+  app.post<{ Params: { id: string }; Querystring: { target?: string } }>("/api/codes/:id/source-qr", { preHandler: requireUser }, async (request, reply) => {
+    const row = ownedCode(db, request.params.id, request.currentUser!.id);
+    if (!row) return reply.code(404).send({ error: "活码不存在" });
+    let validatedTarget: ReturnType<typeof validateTarget> | null = null;
+    if (request.query.target !== undefined) {
+      try {
+        validatedTarget = validateTarget(request.query.target);
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    }
+    const file = await request.file({ limits: { fileSize: 8_000_000, files: 1 } });
+    if (!file) return reply.code(400).send({ error: "请选择二维码原图" });
+    const extensions: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
+    const extension = extensions[file.mimetype];
+    if (!extension) return reply.code(400).send({ error: "二维码原图仅支持 PNG、JPEG 或 WebP" });
+    const buffer = await file.toBuffer();
+    if (buffer.length === 0) return reply.code(400).send({ error: "二维码原图文件为空" });
+    if (!matchesImageType(buffer, file.mimetype)) return reply.code(400).send({ error: "二维码原图内容与格式不匹配" });
+    const sourceDir = path.join(config.dataDir, "source-qrs");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const filename = `${randomUUID()}${extension}`;
+    const newPath = path.join(sourceDir, filename);
+    fs.writeFileSync(newPath, buffer, { flag: "wx" });
+    const now = new Date().toISOString();
+    try {
+      db.transaction(() => {
+        if (validatedTarget && validatedTarget.target !== row.target) {
+          const revisionId = randomUUID();
+          db.prepare("INSERT INTO target_revisions (id, code_id, target, protocol, created_at) VALUES (?, ?, ?, ?, ?)")
+            .run(revisionId, row.id, validatedTarget.target, validatedTarget.protocol, now);
+          db.prepare("UPDATE codes SET active_revision_id = ?, source_qr_path = ?, updated_at = ? WHERE id = ?")
+            .run(revisionId, filename, now, row.id);
+        } else {
+          db.prepare("UPDATE codes SET source_qr_path = ?, updated_at = ? WHERE id = ?").run(filename, now, row.id);
+        }
+      })();
+    } catch (error) {
+      fs.rmSync(newPath, { force: true });
+      throw error;
+    }
+    if (row.source_qr_path) fs.rmSync(path.join(sourceDir, path.basename(row.source_qr_path)), { force: true });
+    return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/codes/:id/source-qr", { preHandler: requireUser }, async (request, reply) => {
+    const row = ownedCode(db, request.params.id, request.currentUser!.id);
+    if (!row?.source_qr_path) return reply.code(404).send({ error: "二维码原图不存在" });
+    const imagePath = path.join(config.dataDir, "source-qrs", path.basename(row.source_qr_path));
+    if (!fs.existsSync(imagePath)) return reply.code(404).send({ error: "二维码原图文件不存在" });
+    const mime = row.source_qr_path.endsWith(".png") ? "image/png" : row.source_qr_path.endsWith(".webp") ? "image/webp" : "image/jpeg";
+    reply.header("Cache-Control", "private, no-cache").type(mime);
+    return reply.send(fs.createReadStream(imagePath));
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/codes/:id/source-qr", { preHandler: requireUser }, async (request, reply) => {
+    const row = ownedCode(db, request.params.id, request.currentUser!.id);
+    if (!row) return reply.code(404).send({ error: "活码不存在" });
+    if (row.source_qr_path) fs.rmSync(path.join(config.dataDir, "source-qrs", path.basename(row.source_qr_path)), { force: true });
+    const now = new Date().toISOString();
+    db.prepare("UPDATE codes SET source_qr_path = NULL, fallback_enabled = 0, updated_at = ? WHERE id = ?").run(now, row.id);
+    return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
+  });
+
+  app.put<{ Params: { id: string } }>("/api/codes/:id/fallback-state", { preHandler: requireUser }, async (request, reply) => {
+    const row = ownedCode(db, request.params.id, request.currentUser!.id);
+    if (!row) return reply.code(404).send({ error: "活码不存在" });
+    const data = bodyOrError(fallbackStateSchema, request.body, reply);
+    if (!data) return;
+    if (data.enabled && !row.source_qr_path) return reply.code(400).send({ error: "请先上传并识别二维码图片" });
+    const now = new Date().toISOString();
+    db.prepare("UPDATE codes SET fallback_enabled = ?, updated_at = ? WHERE id = ?").run(data.enabled ? 1 : 0, now, row.id);
+    return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
 
   app.get<{ Params: { id: string }; Querystring: { days?: string } }>("/api/codes/:id/stats", { preHandler: requireUser }, async (request, reply) => {

@@ -18,6 +18,8 @@ export interface CodeRow {
   active_revision_id: string | null;
   style_json: string;
   icon_path: string | null;
+  source_qr_path: string | null;
+  fallback_enabled: number;
   redirect_enabled: number;
   disabled_reason: string | null;
   created_at: string;

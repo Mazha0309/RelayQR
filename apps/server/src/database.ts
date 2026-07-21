@@ -40,6 +40,8 @@ function migrate(db: RelayDatabase) {
       active_revision_id TEXT,
       style_json TEXT NOT NULL,
       icon_path TEXT,
+      source_qr_path TEXT,
+      fallback_enabled INTEGER NOT NULL DEFAULT 0,
       redirect_enabled INTEGER NOT NULL DEFAULT 1,
       disabled_reason TEXT,
       created_at TEXT NOT NULL,
@@ -74,5 +76,11 @@ function migrate(db: RelayDatabase) {
   }
   if (!columnNames.has("disabled_reason")) {
     db.exec("ALTER TABLE codes ADD COLUMN disabled_reason TEXT");
+  }
+  if (!columnNames.has("source_qr_path")) {
+    db.exec("ALTER TABLE codes ADD COLUMN source_qr_path TEXT");
+  }
+  if (!columnNames.has("fallback_enabled")) {
+    db.exec("ALTER TABLE codes ADD COLUMN fallback_enabled INTEGER NOT NULL DEFAULT 0");
   }
 }

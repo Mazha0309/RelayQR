@@ -16,12 +16,12 @@ export async function buildApp(overrides: Partial<AppConfig> = {}) {
   const app = Fastify({
     logger: process.env.NODE_ENV !== "test",
     trustProxy: config.trustProxy,
-    bodyLimit: 1_000_000,
+    bodyLimit: 9_000_000,
   });
   const db = openDatabase(config.dataDir);
 
   await app.register(cookie);
-  await app.register(multipart, { limits: { files: 1, fileSize: 1_500_000 } });
+  await app.register(multipart, { limits: { files: 1, fileSize: 8_000_000 } });
   await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
 
   app.addHook("onSend", async (_request, reply) => {
@@ -31,7 +31,7 @@ export async function buildApp(overrides: Partial<AppConfig> = {}) {
 
   registerAuth(app, db, config);
   registerCodeRoutes(app, db, config);
-  registerRedirectRoute(app, db);
+  registerRedirectRoute(app, db, config);
 
   app.get("/api/health", async () => ({ status: "ok" }));
 

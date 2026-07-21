@@ -95,6 +95,54 @@ describe("RelayQR API", () => {
     expect((await app.inject({ method: "GET", url: `/r/${code.slug}` })).statusCode).toBe(302);
   });
 
+  it("stores an uploaded QR source and lets the owner toggle the fallback choice page", async () => {
+    const code = await createCode();
+    const rejected = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: true } });
+    expect(rejected.statusCode).toBe(400);
+
+    const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+    const multipart = imageUpload(image);
+    const target = "https://weixin.qq.com/g/example-group";
+    const upload = await app.inject({
+      method: "POST",
+      url: `/api/codes/${code.id}/source-qr?target=${encodeURIComponent(target)}`,
+      headers: { cookie, "content-type": multipart.contentType },
+      payload: multipart.body,
+    });
+    expect(upload.statusCode).toBe(200);
+    expect(upload.json().code).toMatchObject({ target, hasSourceQr: true, fallbackEnabled: false });
+
+    const direct = await app.inject({ method: "GET", url: `/r/${code.slug}` });
+    expect(direct.statusCode).toBe(302);
+    expect(direct.headers.location).toBe(target);
+
+    const enabled = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: true } });
+    expect(enabled.json().code.fallbackEnabled).toBe(true);
+    const choicePage = await app.inject({ method: "GET", url: `/r/${code.slug}` });
+    expect(choicePage.statusCode).toBe(200);
+    expect(choicePage.headers.location).toBeUndefined();
+    expect(choicePage.headers["content-security-policy"]).toContain("img-src 'self'");
+    expect(choicePage.body).toContain("尝试打开群链接");
+    expect(choicePage.body).toContain("长按识别群二维码");
+    expect(choicePage.body).toContain(`/r/${code.slug}/source-qr`);
+
+    const disabled = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: false } });
+    expect(disabled.json().code.fallbackEnabled).toBe(false);
+    expect((await app.inject({ method: "GET", url: `/r/${code.slug}` })).statusCode).toBe(302);
+    expect((await app.inject({ method: "GET", url: `/r/${code.slug}/source-qr` })).statusCode).toBe(404);
+    await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: true } });
+
+    const publicImage = await app.inject({ method: "GET", url: `/r/${code.slug}/source-qr` });
+    expect(publicImage.statusCode).toBe(200);
+    expect(publicImage.headers["content-type"]).toContain("image/png");
+    expect(publicImage.rawPayload.equals(image)).toBe(true);
+
+    const removed = await app.inject({ method: "DELETE", url: `/api/codes/${code.id}/source-qr`, headers: { cookie } });
+    expect(removed.json().code).toMatchObject({ hasSourceQr: false, fallbackEnabled: false });
+    expect((await app.inject({ method: "GET", url: `/r/${code.slug}` })).statusCode).toBe(302);
+    expect((await app.inject({ method: "GET", url: `/r/${code.slug}/source-qr` })).statusCode).toBe(404);
+  });
+
   it("rejects dangerous targets and never reuses a deleted route", async () => {
     const bad = await app.inject({ method: "POST", url: "/api/codes", headers: { cookie }, payload: { name: "Bad", target: "data:text/html,hello" } });
     expect(bad.statusCode).toBe(400);
@@ -114,5 +162,17 @@ describe("RelayQR API", () => {
     });
     expect(response.statusCode).toBe(201);
     return response.json().code as { id: string; slug: string };
+  }
+
+  function imageUpload(image: Buffer) {
+    const boundary = "----relayqr-test-boundary";
+    return {
+      contentType: `multipart/form-data; boundary=${boundary}`,
+      body: Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="sourceQr"; filename="group.png"\r\nContent-Type: image/png\r\n\r\n`),
+        image,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]),
+    };
   }
 });
