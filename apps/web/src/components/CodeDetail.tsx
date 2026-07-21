@@ -70,17 +70,15 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
   };
 
   const decodeTarget = async (file: File) => {
-    const objectUrl = URL.createObjectURL(file);
     setBusy(true); setError("");
     try {
-      const { BrowserQRCodeReader } = await import("@zxing/browser");
-      const result = await new BrowserQRCodeReader().decodeFromImageUrl(objectUrl);
-      setTarget(result.getText());
+      const { decodeQrImage } = await import("../qrDecoder");
+      setTarget(await decodeQrImage(file));
       setMessage("已识别目标，请确认后保存");
     } catch {
-      setError("没有在图片中识别到二维码");
+      setError("没有在图片中识别到二维码，请换一张更清晰的原图");
     } finally {
-      URL.revokeObjectURL(objectUrl); setBusy(false);
+      setBusy(false);
       if (targetFileRef.current) targetFileRef.current.value = "";
     }
   };

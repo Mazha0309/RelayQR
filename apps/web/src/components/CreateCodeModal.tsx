@@ -19,15 +19,12 @@ export function CreateCodeModal({ onClose, onCreated }: Props) {
   const decode = async (file: File) => {
     setDecoding(true);
     setError("");
-    const objectUrl = URL.createObjectURL(file);
     try {
-      const { BrowserQRCodeReader } = await import("@zxing/browser");
-      const result = await new BrowserQRCodeReader().decodeFromImageUrl(objectUrl);
-      setTarget(result.getText());
+      const { decodeQrImage } = await import("../qrDecoder");
+      setTarget(await decodeQrImage(file));
     } catch {
       setError("没有在图片中识别到二维码，请换一张更清晰的图片");
     } finally {
-      URL.revokeObjectURL(objectUrl);
       setDecoding(false);
       if (fileRef.current) fileRef.current.value = "";
     }
