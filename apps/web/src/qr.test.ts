@@ -27,13 +27,12 @@ function qrSource(value: string, inverted = false) {
   return new RGBLuminanceSource(pixels, size, size);
 }
 
-function colourfulQrPixels(value: string) {
+function colourfulQrPixels(value: string, colours = [[255, 0, 0], [0, 190, 0], [0, 0, 255]]) {
   const matrix = QRCode.create(value, { errorCorrectionLevel: "H" }).modules;
   const margin = 4;
   const moduleSize = 8;
   const size = (matrix.size + margin * 2) * moduleSize;
   const pixels = new Uint8ClampedArray(size * size * 4).fill(255);
-  const colours = [[255, 0, 0], [0, 190, 0], [0, 0, 255]];
 
   for (let row = 0; row < matrix.size; row += 1) {
     for (let column = 0; column < matrix.size; column += 1) {
@@ -69,6 +68,12 @@ describe("QR generation dependency", () => {
   it("decodes QR images with multicolour modules", () => {
     const value = "https://weixin.qq.com/g/example-group-link";
     const { pixels, size } = colourfulQrPixels(value);
+    expect(decodeQrPixels(pixels, size, size)).toBe(value);
+  });
+
+  it("retries rotated views when the original orientation is not detected", () => {
+    const value = "https://weixin.qq.com/g/colourful-group-link";
+    const { pixels, size } = colourfulQrPixels(value, [[0, 0, 0]]);
     expect(decodeQrPixels(pixels, size, size)).toBe(value);
   });
 });

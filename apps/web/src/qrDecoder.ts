@@ -63,16 +63,48 @@ export function decodeQrPixels(pixels: Uint8ClampedArray, width: number, height:
     grayscale[pixel] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   }
 
+  const channels = [grayscale, minimum, maximum, red, green, blue];
   let lastError: unknown;
-  for (const channel of [grayscale, minimum, maximum, red, green, blue]) {
-    try {
-      return decodeQrLuminance(new RGBLuminanceSource(channel, width, height));
-    } catch (error) {
-      lastError = error;
+  for (let rotation = 0; rotation < 4; rotation += 1) {
+    for (const channel of channels) {
+      const oriented = rotation === 0
+        ? { pixels: channel, width, height }
+        : rotateLuminance(channel, width, height, rotation);
+      try {
+        return decodeQrLuminance(new RGBLuminanceSource(oriented.pixels, oriented.width, oriented.height));
+      } catch (error) {
+        lastError = error;
+      }
     }
   }
 
   throw lastError instanceof Error ? lastError : new Error("QR code not found");
+}
+
+function rotateLuminance(source: Uint8ClampedArray, width: number, height: number, quarterTurns: number) {
+  const rotatedWidth = quarterTurns % 2 === 0 ? width : height;
+  const rotatedHeight = quarterTurns % 2 === 0 ? height : width;
+  const rotated = new Uint8ClampedArray(source.length);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let destinationX: number;
+      let destinationY: number;
+      if (quarterTurns === 1) {
+        destinationX = height - 1 - y;
+        destinationY = x;
+      } else if (quarterTurns === 2) {
+        destinationX = width - 1 - x;
+        destinationY = height - 1 - y;
+      } else {
+        destinationX = y;
+        destinationY = width - 1 - x;
+      }
+      rotated[destinationY * rotatedWidth + destinationX] = source[y * width + x];
+    }
+  }
+
+  return { pixels: rotated, width: rotatedWidth, height: rotatedHeight };
 }
 
 export async function decodeQrImage(file: Blob): Promise<string> {
