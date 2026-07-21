@@ -47,7 +47,7 @@ cp .env.example .env
 ```
 
 ```dotenv
-PUBLIC_BASE_URL=https://qr.example.com
+DOMAIN=qr.example.com
 SESSION_SECRET=请替换为至少32字节的随机字符串
 ```
 
@@ -57,7 +57,17 @@ SESSION_SECRET=请替换为至少32字节的随机字符串
 docker compose up -d --build
 ```
 
-数据保存在 `relayqr_data` 卷的 `/data` 中，其中包含 SQLite 数据库和用户上传的图标。升级或迁移前应同时备份整个数据卷。
+Compose 只启动 RelayQR，并将端口绑定到宿主机的 `127.0.0.1:3000`，外网无法直接绕过 HTTPS 访问。部署前必须把域名的 A/AAAA 记录解析到服务器，并在宿主机 Caddy 中加入：
+
+```caddyfile
+qr.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+将示例域名替换为 `.env` 中的 `DOMAIN`，然后执行 `sudo systemctl reload caddy`。服务器防火墙或云安全组需要放行 TCP 80 和 TCP 443。
+
+业务数据保存在 `relayqr_data` 卷中。升级或迁移前应备份该数据卷；HTTPS 证书继续由宿主机现有 Caddy 管理。
 
 建议通过 Caddy、Nginx 或其他反向代理提供 HTTPS。`PUBLIC_BASE_URL` 一旦用于印刷二维码，不应随意更换域名；服务器必须长期保留 `/r/:slug` 路由。
 
@@ -67,6 +77,7 @@ docker compose up -d --build
 | --- | --- | --- |
 | `PORT` | `3000` | 服务监听端口 |
 | `HOST` | `0.0.0.0` | 服务监听地址 |
+| `DOMAIN` | `qr.example.com` | Docker HTTPS 部署使用的公网域名 |
 | `PUBLIC_BASE_URL` | `http://localhost:3000` | 生成固定二维码时使用的公网根地址 |
 | `DATA_DIR` | `./data` | SQLite 与图标持久化目录 |
 | `SESSION_SECRET` | 仅开发默认值 | 生产环境必填的会话密钥 |

@@ -4,14 +4,14 @@ services:
     image: relayqr:local
     restart: unless-stopped
     init: true
-    ports:
-      - "${PORT:-3000}:3000"
     environment:
-      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in .env}"
+      PUBLIC_BASE_URL: "https://${DOMAIN:?Set DOMAIN in .env}"
       SESSION_SECRET: "${SESSION_SECRET:?Set SESSION_SECRET in .env}"
       SESSION_TTL_DAYS: "${SESSION_TTL_DAYS:-30}"
       REGISTRATION_ENABLED: "${REGISTRATION_ENABLED:-true}"
-      TRUST_PROXY: "${TRUST_PROXY:-true}"
+      TRUST_PROXY: "true"
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
     volumes:
       - relayqr_data:/data
     read_only: true
