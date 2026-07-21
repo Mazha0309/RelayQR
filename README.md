@@ -2,6 +2,8 @@
 
 RelayQR 是一个自托管的动态二维码管理平台。二维码本身只保存 RelayQR 的固定短链接；你可以在后台随时更换实际目标，无需重新印刷二维码。
 
+由 [Mazha0309](https://github.com/Mazha0309) 创建并维护。
+
 ## 功能
 
 - 多用户独立账号，用户名和密码登录，不依赖邮件服务。
@@ -104,4 +106,4 @@ qr.example.com {
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 [Mazha0309](https://github.com/Mazha0309)

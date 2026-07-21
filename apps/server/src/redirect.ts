@@ -35,7 +35,7 @@ function page(title: string, body: string, script = "", nonce = "") {
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)} · RelayQR</title><style>
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f6f8;color:#17202a;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(100%,460px);background:#fff;border:1px solid #e4e8ec;border-radius:24px;padding:36px;box-shadow:0 18px 60px rgba(30,42,55,.09)}.mark{width:48px;height:48px;border-radius:15px;display:grid;place-items:center;background:#eef1ff;color:#5865db;font-size:24px;font-weight:800;margin-bottom:24px}h1{font-size:24px;margin:0 0 12px;letter-spacing:-.02em}p{color:#66717d;line-height:1.7;margin:0 0 24px;overflow-wrap:anywhere}.reason{padding:14px 16px;background:#fff8e8;border:1px solid #f6dfaa;color:#765516;border-radius:12px}.button{display:block;text-align:center;padding:13px 18px;border-radius:12px;background:#17202a;color:#fff;text-decoration:none;font-weight:650}.foot{margin-top:24px;font-size:12px;color:#9aa3ad;text-align:center}
-</style></head><body><main class="card">${body}<div class="foot">Powered by RelayQR</div></main>${script ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
+</style></head><body><main class="card">${body}<div class="foot">RelayQR · Created by Mazha0309</div></main>${script ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
 }
 
 export function registerRedirectRoute(app: FastifyInstance, db: RelayDatabase) {

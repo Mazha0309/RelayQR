@@ -2,6 +2,8 @@
   "name": "@relayqr/server",
   "version": "0.1.0",
   "private": true,
+  "author": "Mazha0309",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

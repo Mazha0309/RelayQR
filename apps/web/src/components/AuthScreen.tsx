@@ -42,7 +42,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
             <div><ShieldCheck size={18} /><span><strong>自主托管</strong>账号、目标与统计都在你的服务器</span></div>
           </div>
         </div>
-        <p className="story-foot">开源 · 自托管 · 无订阅</p>
+        <p className="story-foot">Created by Mazha0309 · 开源 · 自托管</p>
       </section>
       <section className="auth-panel">
         <form className="auth-card" onSubmit={submit}>
