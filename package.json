@@ -1,0 +1,29 @@
+{
+  "name": "relayqr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted dynamic QR code manager",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @relayqr/server\" \"npm run dev -w @relayqr/web\"",
+    "build": "npm run build -w @relayqr/web && npm run build -w @relayqr/server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "start": "npm run start -w @relayqr/server"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.28.1": true
+  },
+  "overrides": {
+    "pino-std-serializers": "7.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

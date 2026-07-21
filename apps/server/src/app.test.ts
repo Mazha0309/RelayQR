@@ -1,0 +1,118 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildApp } from "./app.js";
+
+describe("RelayQR API", () => {
+  let app: FastifyInstance;
+  let dataDir: string;
+  let cookie: string;
+
+  beforeEach(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "relayqr-test-"));
+    app = await buildApp({
+      dataDir,
+      webDistDir: path.join(dataDir, "missing-web"),
+      publicBaseUrl: "http://relay.test",
+      sessionSecret: "test-session-secret-with-enough-entropy",
+    });
+    await app.ready();
+    const register = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "tester", password: "strong-password" },
+    });
+    expect(register.statusCode).toBe(201);
+    cookie = register.headers["set-cookie"]!.split(";")[0]!;
+  });
+
+  afterEach(async () => {
+    await app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("requires authentication and isolates each user's codes", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/codes" })).statusCode).toBe(401);
+    const second = await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "second", password: "second-password" } });
+    const secondCookie = second.headers["set-cookie"]!.split(";")[0]!;
+    await createCode();
+    const secondList = await app.inject({ method: "GET", url: "/api/codes", headers: { cookie: secondCookie } });
+    expect(secondList.json().codes).toHaveLength(0);
+  });
+
+  it("rejects duplicate users and supports authenticated password changes", async () => {
+    const duplicate = await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "TESTER", password: "another-password" } });
+    expect(duplicate.statusCode).toBe(409);
+    const wrong = await app.inject({ method: "PATCH", url: "/api/auth/password", headers: { cookie }, payload: { currentPassword: "wrong-password", newPassword: "updated-password" } });
+    expect(wrong.statusCode).toBe(400);
+    const changed = await app.inject({ method: "PATCH", url: "/api/auth/password", headers: { cookie }, payload: { currentPassword: "strong-password", newPassword: "updated-password" } });
+    expect(changed.statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "tester", password: "strong-password" } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "tester", password: "updated-password" } })).statusCode).toBe(200);
+  });
+
+  it("updates targets, keeps history, redirects without caching, and restores revisions", async () => {
+    const code = await createCode();
+    const firstRedirect = await app.inject({ method: "GET", url: `/r/${code.slug}`, headers: { "user-agent": "Mozilla/5.0 iPhone" } });
+    expect(firstRedirect.statusCode).toBe(302);
+    expect(firstRedirect.headers.location).toBe("https://example.com/first");
+    expect(firstRedirect.headers["cache-control"]).toContain("no-store");
+
+    const update = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/target`, headers: { cookie }, payload: { target: "weixin://qr/group/new" } });
+    expect(update.statusCode).toBe(200);
+    const customRedirect = await app.inject({ method: "GET", url: `/r/${code.slug}` });
+    expect(customRedirect.statusCode).toBe(200);
+    expect(customRedirect.body).toContain("正在打开目标应用");
+
+    const history = await app.inject({ method: "GET", url: `/api/codes/${code.id}/history`, headers: { cookie } });
+    expect(history.json().revisions).toHaveLength(2);
+    const oldRevision = history.json().revisions.find((revision: { target: string }) => revision.target.includes("example.com"));
+    const restore = await app.inject({ method: "POST", url: `/api/codes/${code.id}/history/${oldRevision.id}/restore`, headers: { cookie } });
+    expect(restore.json().code.target).toBe("https://example.com/first");
+    expect((await app.inject({ method: "GET", url: `/api/codes/${code.id}/history`, headers: { cookie } })).json().revisions).toHaveLength(3);
+  });
+
+  it("requires a reason when pausing and shows it without redirecting", async () => {
+    const code = await createCode();
+    const rejected = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/redirect-state`, headers: { cookie }, payload: { enabled: false, reason: "" } });
+    expect(rejected.statusCode).toBe(400);
+
+    const paused = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/redirect-state`, headers: { cookie }, payload: { enabled: false, reason: "活动维护中" } });
+    expect(paused.json().code.redirectEnabled).toBe(false);
+    const publicPage = await app.inject({ method: "GET", url: `/r/${code.slug}`, headers: { "user-agent": "Mozilla/5.0 Android" } });
+    expect(publicPage.statusCode).toBe(200);
+    expect(publicPage.body).toContain("活动维护中");
+    expect(publicPage.headers.location).toBeUndefined();
+
+    const stats = await app.inject({ method: "GET", url: `/api/codes/${code.id}/stats`, headers: { cookie } });
+    expect(stats.json().total).toBe(1);
+    expect(stats.json().devices).toEqual([{ label: "手机", count: 1 }]);
+
+    const resumed = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/redirect-state`, headers: { cookie }, payload: { enabled: true } });
+    expect(resumed.json().code.redirectEnabled).toBe(true);
+    expect((await app.inject({ method: "GET", url: `/r/${code.slug}` })).statusCode).toBe(302);
+  });
+
+  it("rejects dangerous targets and never reuses a deleted route", async () => {
+    const bad = await app.inject({ method: "POST", url: "/api/codes", headers: { cookie }, payload: { name: "Bad", target: "data:text/html,hello" } });
+    expect(bad.statusCode).toBe(400);
+    const code = await createCode();
+    expect((await app.inject({ method: "DELETE", url: `/api/codes/${code.id}`, headers: { cookie } })).statusCode).toBe(204);
+    const deleted = await app.inject({ method: "GET", url: `/r/${code.slug}` });
+    expect(deleted.statusCode).toBe(410);
+    expect(deleted.body).toContain("永久删除");
+  });
+
+  async function createCode() {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/codes",
+      headers: { cookie },
+      payload: { name: "Example", target: "https://example.com/first" },
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json().code as { id: string; slug: string };
+  }
+});
