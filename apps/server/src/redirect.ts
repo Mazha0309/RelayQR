@@ -101,9 +101,13 @@ function setGateCookie(reply: FastifyReply, row: CodeRow, ip: string, config: Ap
 
 function choicePage(row: CodeRow) {
   const imageUrl = `/r/${encodeURIComponent(row.slug)}/source-qr?v=${encodeURIComponent(row.updated_at)}`;
+  const showLink = Boolean(row.fallback_show_link);
+  const linkSection = showLink
+    ? `<a class="button" href="${escapeHtml(row.target!)}" rel="noreferrer">打开目标链接</a><div class="divider">二维码方式</div>`
+    : "";
   return page(
-    "选择入群方式",
-    `<div class="mark">↗</div><h1>${escapeHtml(row.name)}</h1><p>请选择适合你的入群方式。微信限制链接入群时，请使用下方最新群二维码。</p><a class="button" href="${escapeHtml(row.target!)}" rel="noreferrer">尝试打开群链接</a><div class="divider">备用方式</div><section class="fallback"><h2>长按识别群二维码</h2><p>此图片可由管理员随时更新，外部固定二维码无需更换。</p><img src="${imageUrl}" alt="${escapeHtml(row.name)}的最新群二维码"><p class="helper">长按无反应时，请保存图片后从微信“扫一扫 → 相册”识别。</p></section>`,
+    showLink ? "选择访问方式" : "查看二维码",
+    `<div class="mark">↗</div><h1>${escapeHtml(row.name)}</h1><p>${showLink ? "请选择适合你的访问方式；如果当前应用限制链接打开，请使用下方最新二维码。" : "请使用下方最新二维码继续访问。"}</p>${linkSection}<section class="fallback"><h2>长按识别二维码</h2><p>此图片可由管理员随时更新，外部固定二维码无需更换。</p><img src="${imageUrl}" alt="${escapeHtml(row.name)}的最新二维码"><p class="helper">长按无反应时，请保存图片后从对应应用的“扫一扫 → 相册”识别。</p></section>`,
   );
 }
 
@@ -117,8 +121,8 @@ function gateForm(row: CodeRow, gate: GateConfig, error = "") {
     return `<label class="question"><span class="question-title">${index + 1}. ${escapeHtml(question.prompt)}</span><input class="answer" type="text" name="q_${question.id}" maxlength="200" autocomplete="off" required placeholder="请输入答案"></label>`;
   }).join("");
   return page(
-    "验证入群条件",
-    `<div class="mark">✓</div><h1>${escapeHtml(row.name)}</h1><p>请先回答以下问题。全部正确后才会显示入群链接和二维码。</p>${error ? `<div class="gate-error">${escapeHtml(error)}</div>` : ""}<form class="gate-form" method="post" action="/r/${encodeURIComponent(row.slug)}/verify">${questions}<button class="button" type="submit">提交并查看入群二维码</button><p class="privacy">为执行属地限制和安全统计，本次访问会记录 IP 地址及解析属地。</p></form>`,
+    "验证访问条件",
+    `<div class="mark">✓</div><h1>${escapeHtml(row.name)}</h1><p>请先回答以下问题。全部正确后才会显示目标内容。</p>${error ? `<div class="gate-error">${escapeHtml(error)}</div>` : ""}<form class="gate-form" method="post" action="/r/${encodeURIComponent(row.slug)}/verify">${questions}<button class="button" type="submit">提交验证</button><p class="privacy">为执行属地限制和安全统计，本次访问会记录 IP 地址及解析属地。</p></form>`,
   );
 }
 
@@ -164,12 +168,12 @@ export function registerRedirectRoute(app: FastifyInstance, db: RelayDatabase, c
     noCache(reply);
     if (!row || row.deleted_at) return reply.code(404).type("text/html").send(page("活码不存在", `<div class="mark">?</div><h1>找不到这个活码</h1><p>请检查二维码是否完整，或联系二维码提供者。</p>`));
     if (!row.redirect_enabled || !row.source_qr_path || !row.fallback_enabled || !row.gate_enabled || !row.target) {
-      return reply.code(403).type("text/html").send(page("无法验证", `<div class="mark">!</div><h1>当前无法加入</h1><p>该入口未开启入群验证或已暂停，请联系二维码提供者。</p>`));
+      return reply.code(403).type("text/html").send(page("无法验证", `<div class="mark">!</div><h1>当前无法访问</h1><p>该入口未开启访问验证或已暂停，请联系二维码提供者。</p>`));
     }
     const gate = parseGateConfig(row.gate_config_json);
     const location = await locateIp(request.ip);
     if (!locationPasses(gate, location)) {
-      return reply.code(403).type("text/html").send(page("地区不符合条件", `<div class="mark">×</div><h1>暂时无法加入</h1><p>当前 IP 属地不符合此群的加入条件，入群链接和二维码不会显示。</p>`));
+      return reply.code(403).type("text/html").send(page("地区不符合条件", `<div class="mark">×</div><h1>暂时无法访问</h1><p>当前 IP 属地不符合此入口的访问条件，目标内容不会显示。</p>`));
     }
     if (!answersPass(gate, request.body ?? {})) {
       reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
@@ -210,7 +214,7 @@ export function registerRedirectRoute(app: FastifyInstance, db: RelayDatabase, c
       if (row.gate_enabled) {
         const gate = parseGateConfig(row.gate_config_json);
         if (!locationPasses(gate, location)) {
-          return reply.code(403).type("text/html").send(page("地区不符合条件", `<div class="mark">×</div><h1>暂时无法加入</h1><p>当前 IP 属地不符合此群的加入条件，入群链接和二维码不会显示。</p>`));
+          return reply.code(403).type("text/html").send(page("地区不符合条件", `<div class="mark">×</div><h1>暂时无法访问</h1><p>当前 IP 属地不符合此入口的访问条件，目标内容不会显示。</p>`));
         }
         if (!validGateToken(request.cookies[gateCookie], row, request.ip, config.sessionSecret)) {
           if (gate.questions.length > 0) {

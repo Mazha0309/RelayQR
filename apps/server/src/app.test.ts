@@ -111,7 +111,7 @@ describe("RelayQR API", () => {
       payload: multipart.body,
     });
     expect(upload.statusCode).toBe(200);
-    expect(upload.json().code).toMatchObject({ target, hasSourceQr: true, fallbackEnabled: false });
+    expect(upload.json().code).toMatchObject({ target, hasSourceQr: true, fallbackEnabled: false, showTargetLink: true });
 
     const direct = await app.inject({ method: "GET", url: `/r/${code.slug}` });
     expect(direct.statusCode).toBe(302);
@@ -123,9 +123,17 @@ describe("RelayQR API", () => {
     expect(choicePage.statusCode).toBe(200);
     expect(choicePage.headers.location).toBeUndefined();
     expect(choicePage.headers["content-security-policy"]).toContain("img-src 'self'");
-    expect(choicePage.body).toContain("尝试打开群链接");
-    expect(choicePage.body).toContain("长按识别群二维码");
+    expect(choicePage.body).toContain("打开目标链接");
+    expect(choicePage.body).toContain("长按识别二维码");
     expect(choicePage.body).toContain(`/r/${code.slug}/source-qr`);
+
+    const imageOnlyState = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: true, showTargetLink: false } });
+    expect(imageOnlyState.json().code.showTargetLink).toBe(false);
+    const imageOnlyPage = await app.inject({ method: "GET", url: `/r/${code.slug}` });
+    expect(imageOnlyPage.statusCode).toBe(200);
+    expect(imageOnlyPage.body).toContain("长按识别二维码");
+    expect(imageOnlyPage.body).not.toContain("打开目标链接");
+    expect(imageOnlyPage.body).not.toContain(target);
 
     const disabled = await app.inject({ method: "PUT", url: `/api/codes/${code.id}/fallback-state`, headers: { cookie }, payload: { enabled: false } });
     expect(disabled.json().code.fallbackEnabled).toBe(false);

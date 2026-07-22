@@ -46,6 +46,7 @@ export interface RelayCode {
   hasSourceQr: boolean;
   sourceQrUrl: string | null;
   fallbackEnabled: boolean;
+  showTargetLink: boolean;
   gate: GateSettings;
   redirectEnabled: boolean;
   disabledReason: string | null;

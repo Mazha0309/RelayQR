@@ -22,7 +22,7 @@ const updateSchema = z.object({
 });
 
 const targetSchema = z.object({ target: z.string() });
-const fallbackStateSchema = z.object({ enabled: z.boolean() });
+const fallbackStateSchema = z.object({ enabled: z.boolean(), showTargetLink: z.boolean().optional() });
 const redirectStateSchema = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(true), reason: z.string().optional() }),
   z.object({ enabled: z.literal(false), reason: z.string().trim().min(1, "关闭跳转时必须填写原因").max(300, "原因最多 300 个字符") }),
@@ -60,6 +60,7 @@ function codeDto(row: CodeRow, config: AppConfig) {
     hasSourceQr: Boolean(row.source_qr_path),
     sourceQrUrl: row.source_qr_path ? `/api/codes/${row.id}/source-qr?v=${encodeURIComponent(row.updated_at)}` : null,
     fallbackEnabled: Boolean(row.fallback_enabled),
+    showTargetLink: Boolean(row.fallback_show_link),
     gate: { enabled: Boolean(row.gate_enabled), ...gateConfig },
     redirectEnabled: Boolean(row.redirect_enabled),
     disabledReason: row.disabled_reason,
@@ -313,8 +314,8 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
     if (!data) return;
     if (data.enabled && !row.source_qr_path) return reply.code(400).send({ error: "请先上传并识别二维码图片" });
     const now = new Date().toISOString();
-    db.prepare("UPDATE codes SET fallback_enabled = ?, gate_enabled = CASE WHEN ? = 1 THEN gate_enabled ELSE 0 END, updated_at = ? WHERE id = ?")
-      .run(data.enabled ? 1 : 0, data.enabled ? 1 : 0, now, row.id);
+    db.prepare("UPDATE codes SET fallback_enabled = ?, fallback_show_link = COALESCE(?, fallback_show_link), gate_enabled = CASE WHEN ? = 1 THEN gate_enabled ELSE 0 END, updated_at = ? WHERE id = ?")
+      .run(data.enabled ? 1 : 0, data.showTargetLink === undefined ? null : data.showTargetLink ? 1 : 0, data.enabled ? 1 : 0, now, row.id);
     return { code: codeDto(ownedCode(db, row.id, request.currentUser!.id)!, config) };
   });
 

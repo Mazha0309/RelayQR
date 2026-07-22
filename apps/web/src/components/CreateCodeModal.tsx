@@ -80,7 +80,7 @@ export function CreateCodeModal({ onClose, onCreated }: Props) {
             <button className="button ghost" type="button" onClick={() => fileRef.current?.click()} disabled={decoding}>{decoding ? <LoaderCircle className="spin" size={17} /> : <ImageUp size={17} />}上传并识别二维码</button>
             <span>{sourceFile ? "链接已识别，原图将在创建时保存" : "图片先在浏览器本地识别"}</span>
           </div>
-          {sourceFile && <div className="fallback-option"><div><strong>启用 Fallback 方案</strong><small>扫码者可自行选择打开链接或长按识别原图</small></div><label className="switch"><input type="checkbox" checked={useFallback} onChange={(event) => setUseFallback(event.target.checked)} /><span /></label></div>}
+          {sourceFile && <div className="fallback-option"><div><strong>启用 Fallback 方案</strong><small>展示上传的二维码原图，并可在详情中选择是否同时展示链接</small></div><label className="switch"><input type="checkbox" checked={useFallback} onChange={(event) => setUseFallback(event.target.checked)} /><span /></label></div>}
           {error && <div className="form-error">{error}</div>}
         </div>
         <footer className="modal-footer"><button type="button" className="button secondary" onClick={close}>{pendingCode ? "稍后设置" : "取消"}</button><button className="button primary" disabled={saving || decoding}>{saving ? "处理中…" : pendingCode ? "重试并完成" : "创建活码"}</button></footer>

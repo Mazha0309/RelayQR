@@ -42,6 +42,7 @@ function migrate(db: RelayDatabase) {
       icon_path TEXT,
       source_qr_path TEXT,
       fallback_enabled INTEGER NOT NULL DEFAULT 0,
+      fallback_show_link INTEGER NOT NULL DEFAULT 1,
       gate_enabled INTEGER NOT NULL DEFAULT 0,
       gate_config_json TEXT NOT NULL DEFAULT '{"locationEnabled":false,"allowedRegions":[],"questions":[]}',
       redirect_enabled INTEGER NOT NULL DEFAULT 1,
@@ -86,6 +87,9 @@ function migrate(db: RelayDatabase) {
   }
   if (!columnNames.has("fallback_enabled")) {
     db.exec("ALTER TABLE codes ADD COLUMN fallback_enabled INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnNames.has("fallback_show_link")) {
+    db.exec("ALTER TABLE codes ADD COLUMN fallback_show_link INTEGER NOT NULL DEFAULT 1");
   }
   if (!columnNames.has("gate_enabled")) {
     db.exec("ALTER TABLE codes ADD COLUMN gate_enabled INTEGER NOT NULL DEFAULT 0");

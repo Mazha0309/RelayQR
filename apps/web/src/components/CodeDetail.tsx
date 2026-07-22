@@ -110,9 +110,16 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
   const setFallbackState = (enabled: boolean) => void act(async () => (
     await api<{ code: RelayCode }>(`/api/codes/${code.id}/fallback-state`, {
       method: "PUT",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ enabled, showTargetLink: code.showTargetLink }),
     })
-  ).code, enabled ? "Fallback 选择页已启用" : "Fallback 已关闭，恢复自动跳转");
+  ).code, enabled ? "Fallback 二维码展示页已启用" : "Fallback 已关闭，恢复自动跳转");
+
+  const setTargetLinkVisibility = (showTargetLink: boolean) => void act(async () => (
+    await api<{ code: RelayCode }>(`/api/codes/${code.id}/fallback-state`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: code.fallbackEnabled, showTargetLink }),
+    })
+  ).code, showTargetLink ? "公开页将展示目标链接" : "公开页将只展示二维码");
 
   const removeSourceQr = () => void act(async () => (
     await api<{ code: RelayCode }>(`/api/codes/${code.id}/source-qr`, { method: "DELETE" })
@@ -125,7 +132,7 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
       method: "PUT",
       body: JSON.stringify({ ...gate, allowedRegions: parsedRegions() }),
     })
-  ).code, gate.enabled ? "入群条件已启用" : "入群条件已保存并关闭");
+  ).code, gate.enabled ? "访问条件已启用" : "访问条件已保存并关闭");
 
   const updateQuestion = (id: string, update: (question: GateQuestion) => GateQuestion) => {
     setGate((current) => ({ ...current, questions: current.questions.map((question) => question.id === id ? update(question) : question) }));
@@ -198,23 +205,24 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
 
           <article className="panel fallback-control">
             <div className="panel-heading">
-              <div><span className="panel-icon"><FileImage size={18} /></span><div><h3>Fallback 方案</h3><p>使用上方上传的二维码原图，让扫码者自行选择入群方式</p></div></div>
-              <label className="switch" title={code.hasSourceQr ? "启用 Fallback 选择页" : "请先上传并识别二维码图片"}><input type="checkbox" checked={code.fallbackEnabled} disabled={busy || !code.hasSourceQr} onChange={(event) => setFallbackState(event.target.checked)} /><span /></label>
+              <div><span className="panel-icon"><FileImage size={18} /></span><div><h3>Fallback 方案</h3><p>使用上方上传的二维码原图，提供通用的备用访问方式</p></div></div>
+              <label className="switch" title={code.hasSourceQr ? "启用 Fallback 二维码展示页" : "请先上传并识别二维码图片"}><input type="checkbox" checked={code.fallbackEnabled} disabled={busy || !code.hasSourceQr} onChange={(event) => setFallbackState(event.target.checked)} /><span /></label>
             </div>
             {code.hasSourceQr && code.sourceQrUrl ? <div className="fallback-admin">
               <img src={code.sourceQrUrl} alt="当前上传的二维码原图" />
-              <div><strong>{code.fallbackEnabled ? "选择页已启用" : "原图已保存，Fallback 未启用"}</strong><p>{code.fallbackEnabled ? "扫码者会看到链接和原图二维码两种方式。" : "扫码仍会直接跳转到当前目标。"}</p><div className="icon-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => targetFileRef.current?.click()}><Upload size={16} />上传新二维码</button><button type="button" className="button ghost danger-text" disabled={busy} onClick={removeSourceQr}>移除原图</button></div></div>
+              <div><strong>{code.fallbackEnabled ? "二维码展示页已启用" : "原图已保存，Fallback 未启用"}</strong><p>{code.fallbackEnabled ? (code.showTargetLink ? "访问者会看到目标链接和原图二维码。" : "访问者只会看到原图二维码，不展示目标链接。") : "扫码仍会直接跳转到当前目标。"}</p><div className="icon-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => targetFileRef.current?.click()}><Upload size={16} />上传新二维码</button><button type="button" className="button ghost danger-text" disabled={busy} onClick={removeSourceQr}>移除原图</button></div></div>
             </div> : <div className="fallback-empty"><p>还没有二维码原图。请点击上方“上传并识别二维码”，系统会在更新链接时自动保存原图。</p></div>}
-            <p className="hint">开关关闭时直接跳转；开启时扫码者可选择打开链接或长按识别原图。</p>
+            <div className="fallback-option"><div><strong>展示目标链接</strong><small>关闭后公开页只展示二维码图片，不输出目标链接</small></div><label className="switch"><input type="checkbox" checked={code.showTargetLink} disabled={busy} onChange={(event) => setTargetLinkVisibility(event.target.checked)} /><span /></label></div>
+            <p className="hint">Fallback 关闭时直接跳转；开启后按照上方设置展示二维码，目标链接可独立隐藏。</p>
           </article>
 
           <article className="panel gate-control">
             <div className="panel-heading">
-              <div><span className="panel-icon"><ShieldCheck size={18} /></span><div><h3>入群条件</h3><p>按 IP 属地和答题结果决定是否显示链接与二维码</p></div></div>
-              <label className="switch" title={code.fallbackEnabled ? "启用入群条件" : "请先启用 Fallback"}><input type="checkbox" checked={gate.enabled} disabled={busy || !code.fallbackEnabled} onChange={(event) => setGate((current) => ({ ...current, enabled: event.target.checked }))} /><span /></label>
+              <div><span className="panel-icon"><ShieldCheck size={18} /></span><div><h3>访问条件</h3><p>按 IP 属地和答题结果决定是否显示目标内容</p></div></div>
+              <label className="switch" title={code.fallbackEnabled ? "启用访问条件" : "请先启用 Fallback"}><input type="checkbox" checked={gate.enabled} disabled={busy || !code.fallbackEnabled} onChange={(event) => setGate((current) => ({ ...current, enabled: event.target.checked }))} /><span /></label>
             </div>
 
-            {!code.fallbackEnabled && <div className="gate-prerequisite">请先上传二维码原图并启用 Fallback，入群条件才能保护链接和二维码图片。</div>}
+            {!code.fallbackEnabled && <div className="gate-prerequisite">请先上传二维码原图并启用 Fallback，访问条件才能保护目标内容和二维码图片。</div>}
 
             <section className="gate-section">
               <div className="gate-section-title"><div><MapPin size={16} /><strong>IP 属地筛选</strong></div><label className="switch"><input type="checkbox" checked={gate.locationEnabled} onChange={(event) => setGate((current) => ({ ...current, locationEnabled: event.target.checked }))} /><span /></label></div>
@@ -237,7 +245,7 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
               </div>)}</div>}
             </section>
 
-            <div className="gate-save"><p>开启后，访客必须满足属地要求并答对全部题目；失败时不会返回目标链接或二维码图片。</p><button type="button" className="button primary" disabled={busy || !gateDirty || (gate.enabled && !code.fallbackEnabled)} onClick={saveGate}><Save size={16} />保存入群条件</button></div>
+            <div className="gate-save"><p>开启后，访客必须满足属地要求并答对全部题目；失败时不会返回目标内容或二维码图片。</p><button type="button" className="button primary" disabled={busy || !gateDirty || (gate.enabled && !code.fallbackEnabled)} onClick={saveGate}><Save size={16} />保存访问条件</button></div>
           </article>
 
           <article className={`panel redirect-control ${code.redirectEnabled ? "" : "is-paused"}`}>
