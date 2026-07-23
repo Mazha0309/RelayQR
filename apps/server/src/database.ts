@@ -54,6 +54,13 @@ function migrate(db: RelayDatabase) {
     );
     CREATE INDEX IF NOT EXISTS codes_user_id ON codes(user_id, deleted_at);
 
+    CREATE TABLE IF NOT EXISTS admin_code_edit_grants (
+      admin_user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      code_id TEXT NOT NULL REFERENCES codes(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS admin_code_edit_grants_expires_at ON admin_code_edit_grants(expires_at);
+
     CREATE TABLE IF NOT EXISTS target_revisions (
       id TEXT PRIMARY KEY,
       code_id TEXT NOT NULL REFERENCES codes(id) ON DELETE CASCADE,

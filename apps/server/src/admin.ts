@@ -7,10 +7,13 @@ import type { AppConfig } from "./config.js";
 import type { RelayDatabase } from "./database.js";
 import type { RequestMonitor } from "./monitor.js";
 import { recordAudit } from "./audit.js";
+import { verifyPassword } from "./security.js";
 import { registrationEnabled, setRegistrationEnabled } from "./settings.js";
+import type { UserRow } from "./types.js";
 
 const roleSchema = z.object({ isAdmin: z.boolean() });
 const registrationSchema = z.object({ enabled: z.boolean() });
+const adminPasswordSchema = z.object({ password: z.string().min(1, "请输入管理员密码").max(128) });
 
 export async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
   if (!request.currentUser) return reply.code(401).send({ error: "请先登录" });
@@ -84,6 +87,113 @@ export function registerAdminRoutes(
     registrationEnabled: registrationEnabled(db, config.registrationEnabled),
   }));
 
+  app.get<{ Querystring: { userId?: string } }>("/api/admin/codes", { preHandler: requireAdmin }, async (request) => {
+    const userId = request.query.userId?.trim();
+    const where = userId ? "AND codes.user_id = ?" : "";
+    const rows = db.prepare(`
+      SELECT
+        codes.id,
+        codes.user_id,
+        users.username AS owner_username,
+        codes.slug,
+        codes.name,
+        codes.fallback_enabled,
+        codes.fallback_show_link,
+        codes.gate_enabled,
+        codes.redirect_enabled,
+        codes.disabled_reason,
+        codes.source_qr_path,
+        codes.created_at,
+        codes.updated_at,
+        target_revisions.target,
+        target_revisions.protocol,
+        (SELECT COUNT(*) FROM scan_events WHERE scan_events.code_id = codes.id) AS scan_count
+      FROM codes
+      JOIN users ON users.id = codes.user_id
+      LEFT JOIN target_revisions ON target_revisions.id = codes.active_revision_id
+      WHERE codes.deleted_at IS NULL ${where}
+      ORDER BY codes.updated_at DESC
+    `).all(...(userId ? [userId] : [])) as Array<{
+      id: string;
+      user_id: string;
+      owner_username: string;
+      slug: string;
+      name: string;
+      fallback_enabled: number;
+      fallback_show_link: number;
+      gate_enabled: number;
+      redirect_enabled: number;
+      disabled_reason: string | null;
+      source_qr_path: string | null;
+      created_at: string;
+      updated_at: string;
+      target: string | null;
+      protocol: string | null;
+      scan_count: number;
+    }>;
+    return {
+      codes: rows.map((code) => ({
+        id: code.id,
+        ownerId: code.user_id,
+        ownerUsername: code.owner_username,
+        slug: code.slug,
+        name: code.name,
+        target: code.target,
+        protocol: code.protocol,
+        publicUrl: `${config.publicBaseUrl}/r/${code.slug}`,
+        redirectEnabled: Boolean(code.redirect_enabled),
+        disabledReason: code.disabled_reason,
+        fallbackEnabled: Boolean(code.fallback_enabled),
+        showTargetLink: Boolean(code.fallback_show_link),
+        gateEnabled: Boolean(code.gate_enabled),
+        hasSourceQr: Boolean(code.source_qr_path),
+        scanCount: code.scan_count,
+        createdAt: code.created_at,
+        updatedAt: code.updated_at,
+      })),
+    };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/admin/codes/:id/edit-session", {
+    preHandler: requireAdmin,
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    const parsed = adminPasswordSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "请求参数无效" });
+    const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(request.currentUser!.id) as UserRow;
+    if (!(await verifyPassword(parsed.data.password, admin.password_hash))) {
+      return reply.code(401).send({ error: "管理员密码错误" });
+    }
+    const code = db.prepare(`
+      SELECT codes.id, codes.name, codes.user_id, users.username AS owner_username
+      FROM codes JOIN users ON users.id = codes.user_id
+      WHERE codes.id = ? AND codes.deleted_at IS NULL
+    `).get(request.params.id) as { id: string; name: string; user_id: string; owner_username: string } | undefined;
+    if (!code) return reply.code(404).send({ error: "活码不存在" });
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    db.prepare("DELETE FROM admin_code_edit_grants WHERE expires_at <= ?").run(new Date().toISOString());
+    db.prepare(`
+      INSERT INTO admin_code_edit_grants (admin_user_id, code_id, expires_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(admin_user_id) DO UPDATE SET code_id = excluded.code_id, expires_at = excluded.expires_at
+    `).run(admin.id, code.id, expiresAt);
+    recordAudit(db, {
+      actorUserId: admin.id,
+      actorUsername: admin.username,
+      action: `验证密码并解锁编辑（成员：${code.owner_username}）`,
+      resourceType: "code",
+      resourceId: code.id,
+      resourceName: code.name,
+      ipAddress: normalizedIp(request.ip),
+    });
+    return { expiresAt };
+  });
+
+  app.delete("/api/admin/codes/edit-session", { preHandler: requireAdmin }, async (request, reply) => {
+    db.prepare("DELETE FROM admin_code_edit_grants WHERE admin_user_id = ?").run(request.currentUser!.id);
+    return reply.code(204).send();
+  });
+
   app.put("/api/admin/settings/registration", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = registrationSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "请求参数无效" });
@@ -129,8 +239,14 @@ export function registerAdminRoutes(
     const limit = Math.min(200, Math.max(20, Number(request.query.limit ?? 100) || 100));
     const offset = Math.max(0, Number(request.query.offset ?? 0) || 0);
     const userId = request.query.userId?.trim();
-    const where = userId ? "WHERE audit_events.actor_user_id = ?" : "";
-    const values = userId ? [userId, limit, offset] : [limit, offset];
+    const where = userId ? `
+      WHERE audit_events.actor_user_id = ?
+        OR (
+          audit_events.resource_type = 'code'
+          AND audit_events.resource_id IN (SELECT id FROM codes WHERE user_id = ?)
+        )
+    ` : "";
+    const values = userId ? [userId, userId, limit, offset] : [limit, offset];
     const events = db.prepare(`
       SELECT id, actor_user_id, actor_username, action, resource_type, resource_id, resource_name, ip_address, created_at
       FROM audit_events

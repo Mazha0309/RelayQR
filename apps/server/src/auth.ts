@@ -107,6 +107,7 @@ export function registerAuth(app: FastifyInstance, db: RelayDatabase, config: Ap
   app.post("/api/auth/logout", { preHandler: requireUser }, async (request, reply) => {
     const token = request.cookies[COOKIE_NAME];
     if (token) db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token, config.sessionSecret));
+    db.prepare("DELETE FROM admin_code_edit_grants WHERE admin_user_id = ?").run(request.currentUser!.id);
     reply.clearCookie(COOKIE_NAME, { path: "/" });
     return reply.code(204).send();
   });
@@ -120,6 +121,7 @@ export function registerAuth(app: FastifyInstance, db: RelayDatabase, config: Ap
     }
     const passwordHash = await hashPassword(data.newPassword);
     db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, user.id);
+    db.prepare("DELETE FROM admin_code_edit_grants WHERE admin_user_id = ?").run(user.id);
     const token = request.cookies[COOKIE_NAME];
     if (token) {
       db.prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?")

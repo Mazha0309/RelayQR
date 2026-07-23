@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import { Activity, Clock3, Database, HardDrive, RefreshCw, Server, ShieldCheck, Users } from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import { Activity, ArrowLeft, Clock3, Database, ExternalLink, Eye, HardDrive, KeyRound, QrCode, RefreshCw, Server, ShieldCheck, Users, X } from "lucide-react";
 import { api } from "../api";
-import type { User } from "../types";
+import type { RelayCode, User } from "../types";
+import { CodeDetail } from "./CodeDetail";
 
 interface AdminMember {
   id: string;
@@ -23,6 +24,26 @@ interface AuditEvent {
   resourceName: string | null;
   ipAddress: string;
   createdAt: string;
+}
+
+interface AdminCode {
+  id: string;
+  ownerId: string;
+  ownerUsername: string;
+  slug: string;
+  name: string;
+  target: string | null;
+  protocol: string | null;
+  publicUrl: string;
+  redirectEnabled: boolean;
+  disabledReason: string | null;
+  fallbackEnabled: boolean;
+  showTargetLink: boolean;
+  gateEnabled: boolean;
+  hasSourceQr: boolean;
+  scanCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface ServerStatus {
@@ -82,7 +103,7 @@ interface Props {
   onCurrentUserRoleChange: (isAdmin: boolean) => void;
 }
 
-type AdminTab = "server" | "members";
+type AdminTab = "server" | "codes" | "members";
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
@@ -115,6 +136,13 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [auditHasMore, setAuditHasMore] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [codes, setCodes] = useState<AdminCode[]>([]);
+  const [codeMemberFilter, setCodeMemberFilter] = useState("");
+  const [codesLoading, setCodesLoading] = useState(false);
+  const [unlockCode, setUnlockCode] = useState<AdminCode | null>(null);
+  const [unlockError, setUnlockError] = useState("");
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [editingCode, setEditingCode] = useState<{ code: RelayCode; ownerId: string; ownerUsername: string } | null>(null);
 
   const loadMembers = async () => {
     const result = await api<{ users: AdminMember[] }>("/api/admin/users");
@@ -139,6 +167,17 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
     setServer(result);
   };
 
+  const loadCodes = async (userId = codeMemberFilter) => {
+    setCodesLoading(true);
+    try {
+      const query = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+      const result = await api<{ codes: AdminCode[] }>(`/api/admin/codes${query}`);
+      setCodes(result.codes);
+    } finally {
+      setCodesLoading(false);
+    }
+  };
+
   const loadSettings = async () => {
     const result = await api<{ registrationEnabled: boolean }>("/api/admin/settings");
     setRegistrationEnabled(result.registrationEnabled);
@@ -148,7 +187,7 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
     setRefreshing(true);
     setError("");
     try {
-      await Promise.all([loadMembers(), loadAudit(), loadServer(), loadSettings()]);
+      await Promise.all([loadMembers(), loadAudit(), loadCodes(), loadServer(), loadSettings()]);
     } catch (caught) {
       setError((caught as Error).message);
     } finally {
@@ -169,6 +208,57 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
   useEffect(() => {
     loadAudit(memberFilter).catch((caught) => setError((caught as Error).message));
   }, [memberFilter]);
+
+  useEffect(() => {
+    loadCodes(codeMemberFilter).catch((caught) => setError((caught as Error).message));
+  }, [codeMemberFilter]);
+
+  useEffect(() => {
+    if (!editingCode) return;
+    return () => {
+      void api("/api/admin/codes/edit-session", { method: "DELETE" }).catch(() => undefined);
+    };
+  }, [editingCode?.code.id]);
+
+  const openMemberCodes = (memberId: string) => {
+    setCodeMemberFilter(memberId);
+    setTab("codes");
+  };
+
+  const beginEdit = (code: AdminCode) => {
+    setUnlockError("");
+    setUnlockCode(code);
+  };
+
+  const unlockEdit = async (password: string) => {
+    if (!unlockCode) return;
+    setUnlockBusy(true);
+    setUnlockError("");
+    try {
+      await api(`/api/admin/codes/${unlockCode.id}/edit-session`, {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      const result = await api<{ code: RelayCode }>(`/api/codes/${unlockCode.id}`);
+      setEditingCode({ code: result.code, ownerId: unlockCode.ownerId, ownerUsername: unlockCode.ownerUsername });
+      setUnlockCode(null);
+    } catch (caught) {
+      setUnlockError((caught as Error).message);
+    } finally {
+      setUnlockBusy(false);
+    }
+  };
+
+  const closeEditor = async () => {
+    try {
+      await api("/api/admin/codes/edit-session", { method: "DELETE" });
+      await loadCodes();
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setEditingCode(null);
+    }
+  };
 
   const changeRole = async (member: AdminMember) => {
     const nextRole = !member.isAdmin;
@@ -211,7 +301,20 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
     }
   };
 
-  return <section className="admin-page">
+  if (editingCode) return <div className="admin-edit-shell">
+    <div className="admin-edit-toolbar">
+      <button className="button secondary" onClick={() => void closeEditor()}><ArrowLeft size={16} />返回全部活码</button>
+      <div><span><ShieldCheck size={15} />管理员代修改</span><strong>正在编辑成员“{editingCode.ownerUsername}”的活码</strong><small>密码授权 10 分钟内有效；所有保存操作都会记录管理员账号与 IP。</small></div>
+    </div>
+    <CodeDetail
+      code={editingCode.code}
+      onUpdate={(code) => setEditingCode((current) => current ? { ...current, code } : current)}
+      onDelete={() => undefined}
+      allowDelete={false}
+    />
+  </div>;
+
+  return <><section className="admin-page">
     <header className="admin-header">
       <div><span className="eyebrow">管理员中心</span><h1>成员与服务器</h1><p>查看成员操作轨迹，并监控 RelayQR 运行状态。</p></div>
       <button className="button secondary" disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw size={16} className={refreshing ? "spin" : ""} />刷新</button>
@@ -219,12 +322,14 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
 
     <nav className="admin-tabs">
       <button className={tab === "server" ? "active" : ""} onClick={() => setTab("server")}><Server size={17} />服务器监控</button>
+      <button className={tab === "codes" ? "active" : ""} onClick={() => setTab("codes")}><QrCode size={17} />全部活码</button>
       <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}><Users size={17} />成员与修改记录</button>
     </nav>
 
     {error && <div className="notice error">{error}<button onClick={() => setError("")}>×</button></div>}
 
     {tab === "server" && <ServerMonitor status={server} />}
+    {tab === "codes" && <AdminCodes codes={codes} members={members} memberFilter={codeMemberFilter} loading={codesLoading} onFilter={setCodeMemberFilter} onEdit={beginEdit} />}
     {tab === "members" && <div className="admin-members-layout">
       <article className="panel member-panel">
         <div className="panel-heading"><div><span className="panel-icon"><Users size={18} /></span><div><h3>成员</h3><p>{members.length} 名成员，{members.filter((member) => member.isAdmin).length} 名管理员</p></div></div></div>
@@ -232,7 +337,7 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
         <div className="member-list">{members.map((member) => <div className="member-row" key={member.id}>
           <span className="avatar">{member.username.slice(0, 1).toUpperCase()}</span>
           <div className="member-copy"><div><strong>{member.username}</strong>{member.isAdmin && <span className="admin-badge"><ShieldCheck size={11} />管理员</span>}</div><small>{member.codeCount} 个活码 · {member.auditCount} 条修改 · {member.lastActivityAt ? `最近 ${new Date(member.lastActivityAt).toLocaleString("zh-CN")}` : "暂无修改"}</small></div>
-          <button className={`button compact ${member.isAdmin ? "danger-subtle" : "secondary"}`} disabled={roleBusy === member.id} onClick={() => void changeRole(member)}>{member.isAdmin ? "取消管理员" : "设为管理员"}</button>
+          <div className="member-actions"><button className="button compact ghost" onClick={() => openMemberCodes(member.id)}><Eye size={13} />查看活码</button><button className={`button compact ${member.isAdmin ? "danger-subtle" : "secondary"}`} disabled={roleBusy === member.id} onClick={() => void changeRole(member)}>{member.isAdmin ? "取消管理员" : "设为管理员"}</button></div>
         </div>)}</div>
       </article>
 
@@ -241,7 +346,46 @@ export function AdminPage({ currentUser, onCurrentUserRoleChange }: Props) {
         {events.length ? <><div className="audit-table-wrap"><table><thead><tr><th>时间</th><th>成员</th><th>操作</th><th>对象</th><th>IP</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td>{new Date(event.createdAt).toLocaleString("zh-CN")}</td><td><strong>{event.actorUsername}</strong></td><td>{event.action}</td><td>{event.resourceName ?? event.resourceId ?? "—"}</td><td><code>{event.ipAddress}</code></td></tr>)}</tbody></table></div>{auditHasMore && <button className="button ghost audit-more" disabled={auditLoading} onClick={() => void loadAudit(memberFilter, events.length)}>{auditLoading ? "加载中…" : "加载更多记录"}</button>}</> : <div className="admin-empty">{auditLoading ? "正在加载修改记录…" : "当前筛选条件下还没有修改记录"}</div>}
       </article>
     </div>}
-  </section>;
+  </section>{unlockCode && <AdminPasswordModal code={unlockCode} error={unlockError} busy={unlockBusy} onClose={() => setUnlockCode(null)} onSubmit={unlockEdit} />}</>;
+}
+
+function AdminCodes({ codes, members, memberFilter, loading, onFilter, onEdit }: {
+  codes: AdminCode[];
+  members: AdminMember[];
+  memberFilter: string;
+  loading: boolean;
+  onFilter: (userId: string) => void;
+  onEdit: (code: AdminCode) => void;
+}) {
+  return <article className="panel admin-codes-panel">
+    <div className="audit-heading"><div><span className="panel-icon"><QrCode size={18} /></span><div><h3>成员活码</h3><p>查看全部成员的活码；修改前需验证当前管理员密码</p></div></div><select value={memberFilter} onChange={(event) => onFilter(event.target.value)}><option value="">全部成员</option>{members.map((member) => <option value={member.id} key={member.id}>{member.username}（{member.codeCount}）</option>)}</select></div>
+    {loading && !codes.length ? <div className="admin-empty">正在加载成员活码…</div> : codes.length ? <div className="admin-code-grid">{codes.map((code) => <section className="admin-code-card" key={code.id}>
+      <header><span className="code-visual"><QrCode size={26} /></span><div><div><strong>{code.name}</strong><span className={`status-pill ${code.redirectEnabled ? "enabled" : "paused"}`}>{code.redirectEnabled ? "运行中" : "已暂停"}</span></div><small>成员 {code.ownerUsername} · /r/{code.slug}</small></div></header>
+      <div className="admin-code-target"><span>当前目标</span><code title={code.target ?? "未配置"}>{code.target ?? "未配置"}</code></div>
+      <div className="admin-code-tags"><span>{code.scanCount.toLocaleString()} 次扫描</span>{code.fallbackEnabled && <span>Fallback</span>}{code.gateEnabled && <span>访问条件</span>}{code.fallbackEnabled && !code.showTargetLink && <span>仅二维码</span>}{code.hasSourceQr && <span>已存原图</span>}</div>
+      {!code.redirectEnabled && code.disabledReason && <p className="admin-code-reason">暂停说明：{code.disabledReason}</p>}
+      <footer><small>更新于 {new Date(code.updatedAt).toLocaleString("zh-CN")}</small><div className="admin-code-actions"><a className="button ghost compact" href={code.publicUrl} target="_blank" rel="noreferrer">公开页<ExternalLink size={13} /></a><button className="button secondary compact" onClick={() => onEdit(code)}><KeyRound size={13} />验证并编辑</button></div></footer>
+    </section>)}</div> : <div className="admin-empty">该成员还没有活码</div>}
+  </article>;
+}
+
+function AdminPasswordModal({ code, error, busy, onClose, onSubmit }: {
+  code: AdminCode;
+  error: string;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState("");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void onSubmit(password);
+  };
+  return <div className="modal-backdrop"><form className="modal compact" onSubmit={submit}>
+    <header className="modal-header"><div><h2>验证管理员密码</h2><p>验证后可在 10 分钟内修改“{code.name}”</p></div><button type="button" className="icon-button" onClick={onClose}><X size={20} /></button></header>
+    <div className="modal-body"><label className="field"><span>当前管理员密码</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required autoFocus /></label><p className="admin-password-note">将以当前管理员身份代成员 {code.ownerUsername} 修改；密码不会保存，操作会写入修改记录。</p>{error && <div className="form-error">{error}</div>}</div>
+    <footer className="modal-footer"><button type="button" className="button secondary" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "验证中…" : "验证并进入编辑"}</button></footer>
+  </form></div>;
 }
 
 function ServerMonitor({ status }: { status: ServerStatus | null }) {

@@ -8,11 +8,12 @@ interface Props {
   code: RelayCode;
   onUpdate: (code: RelayCode) => void;
   onDelete: (id: string) => void;
+  allowDelete?: boolean;
 }
 
 type Tab = "overview" | "design" | "analytics" | "history";
 
-export function CodeDetail({ code, onUpdate, onDelete }: Props) {
+export function CodeDetail({ code, onUpdate, onDelete, allowDelete = true }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
   const [target, setTarget] = useState(code.target);
   const [name, setName] = useState(code.name);
@@ -177,7 +178,7 @@ export function CodeDetail({ code, onUpdate, onDelete }: Props) {
           <div className="title-line"><input className="title-input" value={name} onChange={(event) => setName(event.target.value)} onBlur={() => name !== code.name && saveName()} /><span className={`status-pill ${code.redirectEnabled ? "enabled" : "paused"}`}>{code.redirectEnabled ? <><Check size={13} />跳转中</> : <><CirclePause size={13} />已暂停</>}</span></div>
           <div className="public-link"><span>{code.publicUrl}</span><button onClick={copyUrl} title="复制链接">{copied ? <Check size={15} /> : <Copy size={15} />}</button><a href={code.publicUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a></div>
         </div>
-        <button className="button danger-subtle" onClick={deleteCode}><Trash2 size={16} />删除</button>
+        {allowDelete && <button className="button danger-subtle" onClick={deleteCode}><Trash2 size={16} />删除</button>}
       </header>
 
       <nav className="tabs">

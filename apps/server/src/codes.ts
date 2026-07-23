@@ -38,12 +38,26 @@ function bodyOrError<T extends z.ZodType>(schema: T, body: unknown, reply: Fasti
 }
 
 function ownedCode(db: RelayDatabase, codeId: string, userId: string) {
+  const now = new Date().toISOString();
   return db.prepare(`
     SELECT codes.*, target_revisions.target, target_revisions.protocol
     FROM codes
     LEFT JOIN target_revisions ON target_revisions.id = codes.active_revision_id
-    WHERE codes.id = ? AND codes.user_id = ? AND codes.deleted_at IS NULL
-  `).get(codeId, userId) as CodeRow | undefined;
+    WHERE codes.id = ?
+      AND codes.deleted_at IS NULL
+      AND (
+        codes.user_id = ?
+        OR EXISTS (
+          SELECT 1
+          FROM admin_code_edit_grants
+          JOIN users ON users.id = admin_code_edit_grants.admin_user_id
+          WHERE admin_code_edit_grants.admin_user_id = ?
+            AND admin_code_edit_grants.code_id = codes.id
+            AND admin_code_edit_grants.expires_at > ?
+            AND users.is_admin = 1
+        )
+      )
+  `).get(codeId, userId, userId, now) as CodeRow | undefined;
 }
 
 function codeDto(row: CodeRow, config: AppConfig) {
@@ -198,6 +212,9 @@ export function registerCodeRoutes(app: FastifyInstance, db: RelayDatabase, conf
   app.delete<{ Params: { id: string } }>("/api/codes/:id", { preHandler: requireUser }, async (request, reply) => {
     const row = ownedCode(db, request.params.id, request.currentUser!.id);
     if (!row) return reply.code(404).send({ error: "活码不存在" });
+    if (row.user_id !== request.currentUser!.id) {
+      return reply.code(403).send({ error: "管理员代修改不包含删除成员活码" });
+    }
     const now = new Date().toISOString();
     db.prepare("UPDATE codes SET deleted_at = ?, redirect_enabled = 0, updated_at = ? WHERE id = ?").run(now, now, row.id);
     return reply.code(204).send();

@@ -71,11 +71,54 @@ describe("RelayQR API", () => {
       payload: { name: "Member code", target: "https://example.com/member" },
     });
     expect(memberChange.statusCode).toBe(201);
+    expect((await app.inject({ method: "GET", url: "/api/admin/codes", headers: { cookie: secondCookie } })).statusCode).toBe(403);
+    const memberCodes = await app.inject({ method: "GET", url: `/api/admin/codes?userId=${memberId}`, headers: { cookie } });
+    expect(memberCodes.statusCode).toBe(200);
+    expect(memberCodes.json().codes).toEqual([
+      expect.objectContaining({
+        ownerUsername: "member",
+        name: "Member code",
+        target: "https://example.com/member",
+        publicUrl: expect.stringContaining("/r/"),
+      }),
+    ]);
+    const memberCodeId = memberChange.json().code.id as string;
+    expect((await app.inject({ method: "GET", url: `/api/codes/${memberCodeId}`, headers: { cookie } })).statusCode).toBe(404);
+    const wrongAdminPassword = await app.inject({
+      method: "POST",
+      url: `/api/admin/codes/${memberCodeId}/edit-session`,
+      headers: { cookie },
+      payload: { password: "wrong-password" },
+    });
+    expect(wrongAdminPassword.statusCode).toBe(401);
+    const unlocked = await app.inject({
+      method: "POST",
+      url: `/api/admin/codes/${memberCodeId}/edit-session`,
+      headers: { cookie },
+      payload: { password: "strong-password" },
+    });
+    expect(unlocked.statusCode).toBe(200);
+    expect(unlocked.json().expiresAt).toEqual(expect.any(String));
+    const adminUpdate = await app.inject({
+      method: "PUT",
+      url: `/api/codes/${memberCodeId}/target`,
+      headers: { cookie },
+      payload: { target: "https://example.com/admin-updated" },
+    });
+    expect(adminUpdate.statusCode).toBe(200);
+    expect(adminUpdate.json().code.target).toBe("https://example.com/admin-updated");
+    expect((await app.inject({ method: "DELETE", url: `/api/codes/${memberCodeId}`, headers: { cookie } })).statusCode).toBe(403);
+    const memberReadsUpdate = await app.inject({ method: "GET", url: `/api/codes/${memberCodeId}`, headers: { cookie: secondCookie } });
+    expect(memberReadsUpdate.json().code.target).toBe("https://example.com/admin-updated");
+    expect((await app.inject({ method: "DELETE", url: "/api/admin/codes/edit-session", headers: { cookie } })).statusCode).toBe(204);
+    expect((await app.inject({ method: "GET", url: `/api/codes/${memberCodeId}`, headers: { cookie } })).statusCode).toBe(404);
 
     const audit = await app.inject({ method: "GET", url: `/api/admin/audit?userId=${memberId}`, headers: { cookie } });
     expect(audit.statusCode).toBe(200);
     expect(audit.json().events).toEqual(expect.arrayContaining([
       expect.objectContaining({ actorUsername: "member", action: "创建活码", resourceName: "Member code" }),
+      expect.objectContaining({ actorUsername: "tester", action: "更新目标地址", resourceName: "Member code" }),
+      expect.objectContaining({ actorUsername: "tester", action: expect.stringContaining("解锁编辑"), resourceName: "Member code" }),
     ]));
 
     const server = await app.inject({ method: "GET", url: "/api/admin/server", headers: { cookie } });
