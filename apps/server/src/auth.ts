@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import type { RelayDatabase } from "./database.js";
 import { hashPassword, hashToken, newSessionToken, verifyPassword } from "./security.js";
+import { registrationEnabled } from "./settings.js";
 import type { SessionUser, UserRow } from "./types.js";
 
 const credentialsSchema = z.object({
@@ -50,11 +51,11 @@ export function registerAuth(app: FastifyInstance, db: RelayDatabase, config: Ap
     if (!token) return;
     const now = new Date().toISOString();
     const user = db.prepare(`
-      SELECT users.id, users.username
+      SELECT users.id, users.username, users.is_admin AS isAdmin
       FROM sessions JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
-    `).get(hashToken(token, config.sessionSecret), now) as SessionUser | undefined;
-    request.currentUser = user ?? null;
+    `).get(hashToken(token, config.sessionSecret), now) as { id: string; username: string; isAdmin: number } | undefined;
+    request.currentUser = user ? { ...user, isAdmin: Boolean(user.isAdmin) } : null;
   });
 
   const createSession = (reply: FastifyReply, userId: string) => {
@@ -67,17 +68,19 @@ export function registerAuth(app: FastifyInstance, db: RelayDatabase, config: Ap
   };
 
   app.post("/api/auth/register", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
-    if (!config.registrationEnabled) return reply.code(403).send({ error: "当前未开放注册" });
+    if (!registrationEnabled(db, config.registrationEnabled)) return reply.code(403).send({ error: "当前未开放注册" });
     const data = parseBody(credentialsSchema, request.body, reply);
     if (!data) return;
     const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(data.username);
     if (existing) return reply.code(409).send({ error: "该用户名已被使用" });
     const userId = randomUUID();
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)")
-      .run(userId, data.username, await hashPassword(data.password), now);
+    const passwordHash = await hashPassword(data.password);
+    const isAdmin = (db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number }).count === 0;
+    db.prepare("INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(userId, data.username, passwordHash, isAdmin ? 1 : 0, now);
     createSession(reply, userId);
-    return reply.code(201).send({ user: { id: userId, username: data.username } });
+    return reply.code(201).send({ user: { id: userId, username: data.username, isAdmin } });
   });
 
   app.post("/api/auth/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
@@ -88,12 +91,17 @@ export function registerAuth(app: FastifyInstance, db: RelayDatabase, config: Ap
       return reply.code(401).send({ error: "用户名或密码错误" });
     }
     createSession(reply, user.id);
-    return { user: { id: user.id, username: user.username } };
+    return { user: { id: user.id, username: user.username, isAdmin: Boolean(user.is_admin) } };
   });
 
   app.get("/api/auth/me", async (request, reply) => {
     if (!request.currentUser) return reply.code(401).send({ error: "请先登录" });
     return { user: request.currentUser };
+  });
+
+  app.get("/api/auth/config", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return { registrationEnabled: registrationEnabled(db, config.registrationEnabled) };
   });
 
   app.post("/api/auth/logout", { preHandler: requireUser }, async (request, reply) => {

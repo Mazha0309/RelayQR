@@ -54,6 +54,77 @@ describe("RelayQR API", () => {
     expect((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "tester", password: "updated-password" } })).statusCode).toBe(200);
   });
 
+  it("restricts the admin console, records member changes, and safely manages admin roles", async () => {
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie } });
+    expect(me.json().user.isAdmin).toBe(true);
+
+    const second = await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "member", password: "member-password" } });
+    expect(second.json().user.isAdmin).toBe(false);
+    const memberId = second.json().user.id as string;
+    const secondCookie = second.headers["set-cookie"]!.split(";")[0]!;
+    expect((await app.inject({ method: "GET", url: "/api/admin/server", headers: { cookie: secondCookie } })).statusCode).toBe(403);
+
+    const memberChange = await app.inject({
+      method: "POST",
+      url: "/api/codes",
+      headers: { cookie: secondCookie },
+      payload: { name: "Member code", target: "https://example.com/member" },
+    });
+    expect(memberChange.statusCode).toBe(201);
+
+    const audit = await app.inject({ method: "GET", url: `/api/admin/audit?userId=${memberId}`, headers: { cookie } });
+    expect(audit.statusCode).toBe(200);
+    expect(audit.json().events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ actorUsername: "member", action: "创建活码", resourceName: "Member code" }),
+    ]));
+
+    const server = await app.inject({ method: "GET", url: "/api/admin/server", headers: { cookie } });
+    expect(server.statusCode).toBe(200);
+    expect(server.json()).toMatchObject({ counts: { users: 2, admins: 1 }, requests: { totalRequests: expect.any(Number) } });
+
+    const registrationOff = await app.inject({
+      method: "PUT",
+      url: "/api/admin/settings/registration",
+      headers: { cookie },
+      payload: { enabled: false },
+    });
+    expect(registrationOff.json().registrationEnabled).toBe(false);
+    expect((await app.inject({ method: "GET", url: "/api/auth/config" })).json().registrationEnabled).toBe(false);
+    expect((await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "blocked", password: "blocked-password" } })).statusCode).toBe(403);
+    const registrationOn = await app.inject({
+      method: "PUT",
+      url: "/api/admin/settings/registration",
+      headers: { cookie },
+      payload: { enabled: true },
+    });
+    expect(registrationOn.json().registrationEnabled).toBe(true);
+
+    const promoted = await app.inject({
+      method: "PUT",
+      url: `/api/admin/users/${memberId}/admin`,
+      headers: { cookie },
+      payload: { isAdmin: true },
+    });
+    expect(promoted.json().user.isAdmin).toBe(true);
+    expect((await app.inject({ method: "GET", url: "/api/admin/users", headers: { cookie: secondCookie } })).statusCode).toBe(200);
+
+    const demoted = await app.inject({
+      method: "PUT",
+      url: `/api/admin/users/${memberId}/admin`,
+      headers: { cookie },
+      payload: { isAdmin: false },
+    });
+    expect(demoted.json().user.isAdmin).toBe(false);
+    const lastAdminRejected = await app.inject({
+      method: "PUT",
+      url: `/api/admin/users/${me.json().user.id}/admin`,
+      headers: { cookie },
+      payload: { isAdmin: false },
+    });
+    expect(lastAdminRejected.statusCode).toBe(400);
+    expect(lastAdminRejected.json().error).toContain("最后一个管理员");
+  });
+
   it("updates targets, keeps history, redirects without caching, and restores revisions", async () => {
     const code = await createCode();
     const firstRedirect = await app.inject({ method: "GET", url: `/r/${code.slug}`, headers: { "user-agent": "Mozilla/5.0 iPhone" } });

@@ -20,6 +20,7 @@ function migrate(db: RelayDatabase) {
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL COLLATE NOCASE UNIQUE,
       password_hash TEXT NOT NULL,
+      is_admin INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
 
@@ -72,6 +73,38 @@ function migrate(db: RelayDatabase) {
       ip_region TEXT
     );
     CREATE INDEX IF NOT EXISTS scans_code_time ON scan_events(code_id, scanned_at DESC);
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      actor_username TEXT NOT NULL,
+      action TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_id TEXT,
+      resource_name TEXT,
+      ip_address TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS audit_actor_time ON audit_events(actor_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS audit_time ON audit_events(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
+    );
+  `);
+
+  const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+  const userColumnNames = new Set(userColumns.map((column) => column.name));
+  if (!userColumnNames.has("is_admin")) {
+    db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+  }
+  db.exec(`
+    UPDATE users SET is_admin = 1
+    WHERE id = (SELECT id FROM users ORDER BY created_at, id LIMIT 1)
+      AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1)
   `);
 
   const codeColumns = db.prepare("PRAGMA table_info(codes)").all() as Array<{ name: string }>;

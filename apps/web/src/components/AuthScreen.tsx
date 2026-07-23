@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRight, QrCode, RefreshCw, ShieldCheck } from "lucide-react";
 import { api } from "../api";
 import type { User } from "../types";
@@ -11,6 +11,16 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(true);
+
+  useEffect(() => {
+    api<{ registrationEnabled: boolean }>("/api/auth/config")
+      .then((result) => {
+        setRegistrationEnabled(result.registrationEnabled);
+        if (!result.registrationEnabled) setMode("login");
+      })
+      .catch(() => undefined);
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -52,7 +62,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
           </div>
           <div className="segmented">
             <button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>登录</button>
-            <button type="button" className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>注册</button>
+            <button type="button" disabled={!registrationEnabled} className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>{registrationEnabled ? "注册" : "注册已关闭"}</button>
           </div>
           <label className="field"><span>用户名</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="3–32 个字符" required /></label>
           <label className="field"><span>密码</span><input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 个字符" required /></label>

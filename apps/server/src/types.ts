@@ -2,12 +2,14 @@ export interface UserRow {
   id: string;
   username: string;
   password_hash: string;
+  is_admin: number;
   created_at: string;
 }
 
 export interface SessionUser {
   id: string;
   username: string;
+  isAdmin: boolean;
 }
 
 export interface CodeRow {

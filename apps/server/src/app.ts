@@ -9,8 +9,11 @@ import type { AppConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./database.js";
 import { registerAuth } from "./auth.js";
+import { registerAdminRoutes } from "./admin.js";
+import { registerAuditLog } from "./audit.js";
 import { registerCodeRoutes } from "./codes.js";
 import { registerRedirectRoute } from "./redirect.js";
+import { registerRequestMonitor } from "./monitor.js";
 
 export async function buildApp(overrides: Partial<AppConfig> = {}) {
   const config = loadConfig(overrides);
@@ -31,7 +34,10 @@ export async function buildApp(overrides: Partial<AppConfig> = {}) {
     reply.header("X-Frame-Options", "DENY");
   });
 
+  const monitor = registerRequestMonitor(app);
+  registerAuditLog(app, db);
   registerAuth(app, db, config);
+  registerAdminRoutes(app, db, config, monitor);
   registerCodeRoutes(app, db, config);
   registerRedirectRoute(app, db, config);
 

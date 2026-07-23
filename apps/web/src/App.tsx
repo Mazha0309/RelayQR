@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Activity, ChevronRight, CirclePause, KeyRound, LayoutDashboard, LogOut, Menu, Plus, QrCode, Search, X } from "lucide-react";
+import { Activity, ChevronRight, CirclePause, KeyRound, LayoutDashboard, LogOut, Menu, Plus, QrCode, Search, ShieldCheck, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import type { RelayCode, User } from "./types";
 import { AuthScreen } from "./components/AuthScreen";
+import { AdminPage } from "./components/AdminPage";
 import { CodeDetail } from "./components/CodeDetail";
 import { CreateCodeModal } from "./components/CreateCodeModal";
 
@@ -15,6 +16,7 @@ export default function App() {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [view, setView] = useState<"dashboard" | "admin">("dashboard");
 
   const loadCodes = async () => {
     const result = await api<{ codes: RelayCode[] }>("/api/codes");
@@ -33,9 +35,14 @@ export default function App() {
 
   const updateCode = (updated: RelayCode) => setCodes((current) => [updated, ...current.filter((code) => code.id !== updated.id)]);
   const deleteCode = (id: string) => { setCodes((current) => current.filter((code) => code.id !== id)); setSelectedId(null); };
-  const select = (id: string | null) => { setSelectedId(id); setSidebarOpen(false); };
-  const authenticated = async (newUser: User) => { setUser(newUser); await loadCodes(); };
-  const logout = async () => { await api("/api/auth/logout", { method: "POST" }); setUser(null); setCodes([]); setSelectedId(null); };
+  const select = (id: string | null) => { setSelectedId(id); setView("dashboard"); setSidebarOpen(false); };
+  const authenticated = async (newUser: User) => { setUser(newUser); setView("dashboard"); await loadCodes(); };
+  const logout = async () => { await api("/api/auth/logout", { method: "POST" }); setUser(null); setCodes([]); setSelectedId(null); setView("dashboard"); };
+  const openAdmin = () => { setView("admin"); setSidebarOpen(false); };
+  const updateCurrentUserRole = (isAdmin: boolean) => {
+    setUser((current) => current ? { ...current, isAdmin } : current);
+    if (!isAdmin) setView("dashboard");
+  };
 
   if (loading) return <div className="app-loading"><span className="brand-mark"><QrCode size={24} /></span><strong>RelayQR</strong></div>;
   if (!user) return <AuthScreen onAuthenticated={authenticated} />;
@@ -47,7 +54,8 @@ export default function App() {
           <div className="brand"><span className="brand-mark"><QrCode size={20} /></span>RelayQR</div>
           <button className="mobile-close" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
         </div>
-        <button className={`nav-home ${selectedId === null ? "active" : ""}`} onClick={() => select(null)}><LayoutDashboard size={18} />总览</button>
+        <button className={`nav-home ${view === "dashboard" && selectedId === null ? "active" : ""}`} onClick={() => select(null)}><LayoutDashboard size={18} />总览</button>
+        {user.isAdmin && <button className={`nav-home ${view === "admin" ? "active" : ""}`} onClick={openAdmin}><ShieldCheck size={18} />管理员中心</button>}
         <div className="sidebar-section">
           <div className="section-label"><span>我的活码</span><button onClick={() => setCreateOpen(true)} title="新建活码"><Plus size={16} /></button></div>
           <div className="sidebar-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索" /></div>
@@ -57,7 +65,7 @@ export default function App() {
           </div>
         </div>
         <div className="user-area">
-          <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div><div><strong>{user.username}</strong><small>本地账号</small></div>
+          <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div><div><strong>{user.username}</strong><small>{user.isAdmin ? "管理员" : "本地账号"}</small></div>
           <button title="修改密码" onClick={() => setPasswordOpen(true)}><KeyRound size={16} /></button>
           <button title="退出登录" onClick={logout}><LogOut size={16} /></button>
         </div>
@@ -66,10 +74,10 @@ export default function App() {
 
       <main className="main-content">
         <header className="mobile-header"><button onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="brand"><span className="brand-mark"><QrCode size={18} /></span>RelayQR</div><button className="mobile-add" onClick={() => setCreateOpen(true)}><Plus size={20} /></button></header>
-        {selected ? <CodeDetail code={selected} onUpdate={updateCode} onDelete={deleteCode} /> : <HomeDashboard codes={codes} onSelect={(id) => select(id)} onCreate={() => setCreateOpen(true)} />}
+        {view === "admin" && user.isAdmin ? <AdminPage currentUser={user} onCurrentUserRoleChange={updateCurrentUserRole} /> : selected ? <CodeDetail code={selected} onUpdate={updateCode} onDelete={deleteCode} /> : <HomeDashboard codes={codes} onSelect={(id) => select(id)} onCreate={() => setCreateOpen(true)} />}
       </main>
 
-      {createOpen && <CreateCodeModal onClose={() => setCreateOpen(false)} onCreated={(code) => { setCodes((current) => [code, ...current]); setSelectedId(code.id); setCreateOpen(false); }} />}
+      {createOpen && <CreateCodeModal onClose={() => setCreateOpen(false)} onCreated={(code) => { setCodes((current) => [code, ...current]); setSelectedId(code.id); setView("dashboard"); setCreateOpen(false); }} />}
       {passwordOpen && <PasswordModal onClose={() => setPasswordOpen(false)} />}
     </div>
   );
